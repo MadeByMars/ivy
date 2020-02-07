@@ -675,6 +675,16 @@ def p_pname_this(p):
     p[0] = App(This())
     p[0].lineno = get_lineno(p,1)
 
+def p_pname_true(p):
+    'pname : TRUE'
+    p[0] = Atom('true')
+    p[0].lineno = get_lineno(p,1)
+
+def p_pname_false(p):
+    'pname : FALSE'
+    p[0] = Atom('false')
+    p[0].lineno = get_lineno(p,1)
+
 def p_pnames(p):
     'pnames : '
     p[0] = []
@@ -1651,6 +1661,24 @@ def p_top_interpret_symbol_arrow_lcb_symbol_dots_symbol_rcb(p):
     thing.lineno = get_lineno(p,4)
     p[0].declare(thing)
 
+def p_moresymbols(p):
+    'moresymbols : '
+    p[0] = []
+    
+def p_moresymbols_more_symbols_comma_symbol(p):
+    'moresymbols : moresymbols COMMA SYMBOL'
+    p[0] = p[1]
+    p[0].append(p[3])
+
+def p_top_interpret_symbol_arrow_lcb_symbol_moresymbols_rcb(p):
+    'top : top INTERPRET oper ARROW LCB SYMBOL moresymbols RCB'
+    p[0] = p[1]
+    imp = Implies(p[3],EnumeratedSort(*[Atom(n) for n in ([p[6]]+p[7])]))
+    imp.lineno = get_lineno(p,4)
+    thing = InterpretDecl(addlabel(mk_lf(imp),'interp'))
+    thing.lineno = get_lineno(p,4)
+    p[0].declare(thing)
+
 def parse_nativequote(p,n):
     string = p[n][3:-3] # drop the quotation marks
     fields = string.split('`')
@@ -2037,9 +2065,9 @@ else:
         'decreases : '
         p[0] = []
 
-    def p_action_while_fmla_invariants_decreases_lcb_action_rcb(p):
-        'action : WHILE fmla invariants decreases sequence'
-        p[0] = WhileAction(*([check_non_temporal(p[2]), p[5]] + p[3] + p[4]))
+    def p_action_while_somefmla_invariants_decreases_lcb_action_rcb(p):
+        'action : WHILE somefmla invariants decreases sequence'
+        p[0] = WhileAction(*([check_non_temporal(p[2]), fix_if_part(p[2],p[5])] + p[3] + p[4]))
         p[0].lineno = get_lineno(p,1)
 
 def p_action_if_times_lcb_action_rcb_else_LCB_action_RCB(p):

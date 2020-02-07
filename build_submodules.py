@@ -5,6 +5,10 @@ if platform.system() == 'Windows':
     print "windows build is not currently supported"
     exit(1)
 
+so_ext = "so"
+if platform.system() == 'Darwin':
+    so_ext = "dylib"
+
 def do_cmd(cmd):
     print cmd
     status = os.system(cmd)
@@ -29,6 +33,8 @@ os.chdir('build')
 
 do_cmd('make -j 4')
 
+do_cmd('rm -f {}/z3/lib/libz3.{}'.format(ivydir,so_ext)) # work around Z3 install bug
+
 do_cmd('make install')
 
 os.chdir(cwd)
@@ -37,8 +43,8 @@ if not os.path.exists('ivy/lib'):
     do_cmd('mkdir ivy/lib')
 
 do_cmd('cp include/*.h ivy/include')
-do_cmd('cp lib/*.so ivy/lib')
-do_cmd('cp lib/*.so ivy/z3')
+do_cmd('cp lib/*.{} ivy/lib'.format(so_ext))
+do_cmd('cp lib/*.{} ivy/z3'.format(so_ext))
 
 
 if not os.path.exists('submodules/picotls'):

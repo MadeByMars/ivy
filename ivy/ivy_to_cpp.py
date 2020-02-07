@@ -346,6 +346,8 @@ class ReturnRefType(object): # return by reference in argument position "pos"
         self.pos = pos
     def make(self,t):
         return 'void'
+    def __repr__(self):
+        return "ReturnRefType({})".format(self.pos)
 
 def ctype(sort,classname=None,ptype=None):
     ptype = ptype or ValueType()
@@ -510,6 +512,9 @@ def emit_cpp_sorts(header):
             header.append("    };\n");
         elif isinstance(il.sig.sorts[name],il.EnumeratedSort):
             sort = il.sig.sorts[name]
+            header.append('    enum ' + varname(name) + '{' + ','.join(varname(x) for x in sort.extension) + '};\n');
+        elif name in il.sig.interp and isinstance(il.sig.interp[name],il.EnumeratedSort):
+            sort = il.sig.interp[name]
             header.append('    enum ' + varname(name) + '{' + ','.join(varname(x) for x in sort.extension) + '};\n');
         elif name in im.module.variants:
             sort = il.sig.sorts[name]
@@ -1259,6 +1264,10 @@ def emit_native(header,impl,native,classname):
 # in which case it is passed by value. Other output parameters are
 # returned by value.
 #
+# Output parameters beyond the first are always return by reference.
+# If they do not match any input parameter, they are added to the
+# end of the input parameters.
+#
 # Notwithstanding the above, all exported actions use call and return
 # by value so as not to confused external callers.
 
@@ -1279,12 +1288,23 @@ def annotate_action(name,action):
     action.param_types = [RefType() if any(p == q for q in action.formal_returns)
                           else ValueType() if action_assigns(p) or not is_struct(p.sort) else ConstRefType()
                           for p in action.formal_params]
-    def return_type(p):
+    next_arg_pos = len(action.formal_params)
+    action.return_types = []
+    def matches_input(p,action):
         for idx,q in enumerate(action.formal_params):
             if p == q:
-                return ReturnRefType(idx)
-        return ValueType()
-    action.return_types = [return_type(p) for p in action.formal_returns]
+                return idx
+        return None
+    for pos,p in enumerate(action.formal_returns):
+        idx = matches_input(p,action)
+        if idx is not None:
+            thing = ReturnRefType(idx)
+        elif pos > 0:
+            thing = ReturnRefType(next_arg_pos)
+            next_arg_pos = next_arg_pos + 1
+        else:
+            thing = ValueType()
+        action.return_types.append(thing)
 
 def get_param_types(name,action):
     if not hasattr(action,"param_types"):
@@ -1311,6 +1331,15 @@ def emit_param_decls(header,name,params,extra=[],classname=None,ptypes=None):
     header.append(', '.join(extra + [ctype(p.sort,classname=classname,ptype = ptypes[idx] if ptypes else None) + ' ' + varname(p.name) for idx,p in enumerate(params)]))
     header.append(')')
 
+def emit_param_decls_with_inouts(header,name,params,classname,ptypes,returns,return_ptypes):
+    extra_params = []
+    extra_ptypes = []
+    for (r,rp) in zip(returns,return_ptypes):
+        if isinstance(rp,ReturnRefType) and rp.pos >= len(params):
+            extra_params.append(r)
+            extra_ptypes.append(RefType())
+    emit_param_decls(header,name,params+extra_params,classname=classname,ptypes=ptypes+extra_ptypes)
+
 def emit_method_decl(header,name,action,body=False,classname=None,inline=False):
     if not hasattr(action,"formal_returns"):
         print "bad name: {}".format(name)
@@ -1323,13 +1352,14 @@ def emit_method_decl(header,name,action,body=False,classname=None,inline=False):
         header.append('virtual ')
     if len(rs) == 0:
         header.append('void ')
-    elif len(rs) == 1:
-        header.append(ctype(rs[0].sort,classname=classname,ptype=rtypes[0]) + ' ')
     else:
-        raise iu.IvyError(action,'cannot handle multiple output values')
+        header.append(ctype(rs[0].sort,classname=classname,ptype=rtypes[0]) + ' ')
+    if len(rs) > 1:
+        if any(not isinstance(p,ReturnRefType) for p in rtypes[1:]):
+            raise iu.IvyError(action,'cannot handle multiple output in exported actions: {}'.format(name))
     if body and not inline:
         header.append(classname + '::')
-    emit_param_decls(header,name,action.formal_params,ptypes=ptypes,classname=classname if inline else None)
+    emit_param_decls_with_inouts(header,name,action.formal_params,classname if inline else None,ptypes,rs,rtypes)
     
 def emit_action(header,impl,name,classname):
     action = im.module.actions[name]
@@ -1367,7 +1397,8 @@ def emit_some_action(header,impl,name,action,classname,inline=False):
         trace_action(code,name,action)
         if opt_trace.get():
             code_line(code,'__ivy_out ' + number_format + ' << "{" << std::endl')
-    if len(action.formal_returns) == 1:
+    pt,rt = get_param_types(name,action)
+    if len(action.formal_returns) >= 1 and not isinstance(rt[0],ReturnRefType):
         indent(code)
         p = action.formal_returns[0]
         if p not in action.formal_params:
@@ -1378,8 +1409,7 @@ def emit_some_action(header,impl,name,action,classname,inline=False):
     if name in import_callers:
         if opt_trace.get():
             code_line(code,'__ivy_out ' + number_format + ' << "}" << std::endl')
-    pt,rt = get_param_types(name,action)
-    if len(action.formal_returns) == 1 and not isinstance(rt[0],ReturnRefType):
+    if len(action.formal_returns) >= 1 and not isinstance(rt[0],ReturnRefType):
         indent(code)
         code.append('return ' + varname(action.formal_returns[0].name) + ';\n')
     indent_level -= 1
@@ -2166,6 +2196,7 @@ struct out_of_bounds {
 };
 
 template <class T> T _arg(std::vector<ivy_value> &args, unsigned idx, long long bound);
+template <class T> T __lit(const char *);
 
 template <>
 bool _arg<bool>(std::vector<ivy_value> &args, unsigned idx, long long bound) {
@@ -2657,7 +2688,22 @@ class z3_thunk : public thunk<D,R> {
     enum_sort_names = [s for s in sorted(il.sig.sorts) if isinstance(il.sig.sorts[s],il.EnumeratedSort)]
     if True or target.get() == "repl":
 
+        # forward declare all the equality operations for variant types
+
         for sort_name in im.module.sort_order:
+            if sort_name in im.module.variants:
+                csname = varname(sort_name)
+                cfsname = classname + '::' + csname
+                code_line(header,'inline bool operator ==(const {} &s, const {} &t);'.format(cfsname,cfsname))
+
+
+        # Tricky: inlines for for supertypes have to come *after* the inlines
+        # for the subtypes. So we re-sort the types accordingly.
+        arcs = [(x,s) for s in im.module.sort_order for x in im.sort_dependencies(im.module,s,with_variants=True)]
+        variant_of = set((x.name,y) for y,l in im.module.variants.iteritems() for x in l)
+        arcs = [a for a in arcs if a in variant_of]
+        inline_sort_order = iu.topological_sort(im.module.sort_order,arcs)
+        for sort_name in inline_sort_order:
             if sort_name in im.module.variants:
                 sort = im.module.sig.sorts[sort_name] 
                 assert sort in sort_to_cpptype
@@ -2714,7 +2760,7 @@ class z3_thunk : public thunk<D,R> {
                 code_line(impl,"res.close_struct()")
                 close_scope(impl)
 
- 
+
         for sort_name in enum_sort_names:
             sort = im.module.sig.sorts[sort_name]
             csname = varname(sort_name)
@@ -3025,6 +3071,7 @@ class z3_thunk : public thunk<D,R> {
                     impl.append('    ivy._generating = false;\n')
                     emit_repl_boilerplate3test(header,impl,classname)
                 else:
+                    impl.append("    ivy.__init();\n");
                     if im.module.public_actions:
                         emit_repl_boilerplate3(header,impl,classname)
                     else:
@@ -3182,7 +3229,10 @@ def emit_constant(self,header,code):
         code.append(funname(self.name)+'()')
         return
     if isinstance(self,il.Symbol) and self.is_numeral():
-        if is_native_sym(self) or self.sort.name in im.module.sort_destructors:
+        if is_native_sym(self):
+            code.append('__lit<'+varname(self.sort)+'>(' + self.name + ')')
+            return
+        if self.sort.name in im.module.sort_destructors:
             raise iu.IvyError(None,"cannot compile symbol {} of sort {}".format(self.name,self.sort))
         if self.sort.name in il.sig.interp and il.sig.interp[self.sort.name].startswith('bv['):
             sname,sparms = parse_int_params(il.sig.interp[self.sort.name])
@@ -3830,28 +3880,37 @@ def emit_call(self,header):
         header.append('___ivy_stack.push_back(' + str(self.unique_id) + ');\n')
     code = []
     indent(code)
-    retval = None
-    args = self.args[0].args
+    retvals = []
+    args = list(self.args[0].args)
+    nargs = len(args)
     name = self.args[0].rep
     action = im.module.actions[name]
-    if len(self.args) == 2:
+    fmls = list(action.formal_params)
+    if len(self.args) >= 2:
         pt,rt = get_param_types(name,action)
-        pos = rt[0].pos if isinstance(rt[0],ReturnRefType) else None
-        if pos is not None:
-            iparg = self.args[0].args[pos]
-            if (iparg != self.args[1] or
-                any(j != pos and may_alias(arg,iparg) for j,arg in enumerate(self.args[0].args))):
-                retval = new_temp(header,self.args[1].sort)
-                code.append(retval + ' = ')
-                self.args[0].args[pos].emit(header,code)
-                code.append('; ')
-                args = [il.Symbol(retval,self.args[1].sort) if idx == pos else a for idx,a in enumerate(args)]
-        else:
+        for rpos in range(len(rt)):
+            rv = self.args[1 + rpos]
+            pos = rt[rpos].pos if isinstance(rt[rpos],ReturnRefType) else None
+            if pos is not None:
+                if pos < nargs:
+                    iparg = self.args[0].args[pos]
+                    if (iparg != rv or
+                        any(j != pos and may_alias(arg,iparg) for j,arg in enumerate(self.args[0].args))):
+                        retval = new_temp(header,rv.sort)
+                        code.append(retval + ' = ')
+                        self.args[0].args[pos].emit(header,code)
+                        code.append('; ')
+                        retvals.append((rv,retval))
+                        args = [il.Symbol(retval,self.args[1].sort) if idx == pos else a for idx,a in enumerate(args)]
+                else:
+                    args.append(self.args[1+rpos])
+                    fmls.append(rv)
+        if not isinstance(rt[0],ReturnRefType):
             self.args[1].emit(header,code)
             code.append(' = ')
     code.append(varname(str(self.args[0].rep)) + '(')
     first = True
-    for p,fml in zip(args,action.formal_params):
+    for p,fml in zip(args,fmls):
         if not first:
             code.append(', ')
         lsort,rsort = fml.sort,p.sort
@@ -3861,9 +3920,9 @@ def emit_call(self,header):
             p.emit(header,code)
         first = False
     code.append(');\n')    
-    if retval is not None:
+    for (rv,retval) in retvals:
         indent(code) 
-        self.args[1].emit(header,code)
+        rv.emit(header,code)
         code.append(' = ' + retval + ';\n')
     header.extend(code)
     if target.get() in ["gen","test"]:
@@ -3934,9 +3993,27 @@ ia.IfAction.emit = emit_if
 def emit_while(self,header):
     global indent_level
     code = []
-    open_scope(header,line='while('+code_eval(header,self.args[0])+')')
-    self.args[1].emit(header)
-    close_scope(header)
+    if isinstance(self.args[0],ivy_ast.Some):
+        local_start(header,self.args[0].params())
+
+    cond = code_eval(code,self.args[0])
+    if len(code) == 0:
+        open_scope(header,line='while('+cond+')')
+        self.args[1].emit(header)
+        close_scope(header)
+    else:
+        open_scope(header,line='while(true)')
+        header.extend(code);
+        open_scope(header,line='if('+cond+')')
+        self.args[1].emit(header)
+        close_scope(header)
+        open_scope(header,line='else')
+        code_line(header,'break')
+        close_scope(header)
+        close_scope(header)
+    if isinstance(self.args[0],ivy_ast.Some):
+        local_end(header)
+        
 
 
 ia.WhileAction.emit = emit_while
@@ -4149,8 +4226,16 @@ ivy_value parse_value(const std::string& cmd, int &pos) {
     else if (pos < cmd.size() && cmd[pos] == '"') {
         pos++;
         res.atom = "";
-        while (pos < cmd.size() && cmd[pos] != '"')
-            res.atom.push_back(cmd[pos++]);
+        while (pos < cmd.size() && cmd[pos] != '"') {
+            char c = cmd[pos++];
+            if (c == '\\\\') {
+                if (pos == cmd.size())
+                    throw_syntax(pos);
+                c = cmd[pos++];
+                c = (c == 'n') ? 10 : (c == 'r') ? 13 : (c == 't') ? 9 : c;
+            }
+            res.atom.push_back(c);
+        }
         if(pos == cmd.size())
             throw_syntax(pos);
         pos++;
@@ -5428,7 +5513,7 @@ namespace hash_space {
             const Value *operator->() const { return &(operator*()); }
 
             const_iterator &operator++() {
-                Entry *old = ent;
+                const Entry *old = ent;
                 ent = ent->next;
                 if (!ent) {
                     size_t bucket = tab->get_bucket(old->val);
@@ -5700,6 +5785,32 @@ namespace hash_space {
     }
     };
 
+    template <typename D,typename R>
+        class hash<hash_map<D,R> > {
+    public:
+        size_t operator()(const hash_map<D,R> &p) const {
+            hash<D > h1;
+            hash<R > h2;
+            size_t res = 0;
+            
+            for (typename hash_map<D,R>::const_iterator it=p.begin(), en=p.end(); it!=en; ++it)
+                res += (h1(it->first)+h2(it->second));
+            return res;
+        }
+    };
+
+    template <typename D,typename R>
+    inline bool operator ==(const hash_map<D,R> &s, const hash_map<D,R> &t){
+        for (typename hash_map<D,R>::const_iterator it=s.begin(), en=s.end(); it!=en; ++it) {
+            typename hash_map<D,R>::const_iterator it2 = t.find(it->first);
+            if (it2 == t.end() || !(it->second == it2->second)) return false;
+        }
+        for (typename hash_map<D,R>::const_iterator it=t.begin(), en=t.end(); it!=en; ++it) {
+            typename hash_map<D,R>::const_iterator it2 = s.find(it->first);
+            if (it2 == t.end() || !(it->second == it2->second)) return false;
+        }
+        return true;
+    }
 }
 #endif
 """

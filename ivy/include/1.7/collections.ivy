@@ -60,6 +60,17 @@ module array(domain,range) = {
 
     function segment(A:t, LO:domain, HI:domain) : t
 
+    # Extract the last element, if there is one
+
+    action back(a:t) returns (res:range)
+
+    # remove the last element if there is one
+    action pop_back(a:t) returns (a:t)
+
+    # reverse an array
+    action reverse(a:t) returns (a:t)
+    
+
     ########################################
     # Specification
     #
@@ -98,7 +109,7 @@ module array(domain,range) = {
 	after size {
 	    assert s = end(a)
 	}
-	after resize {
+	after resize{
 	    assert end(a) = s;
 	    assert 0 <= X & X < end(old a) -> value(a,X) = value(old a,X);
 	    assert end(old a) <= X & X < s -> value(a,X) = v
@@ -134,7 +145,7 @@ module array(domain,range) = {
 
 	implement create {
 	    <<<
-	        `a`.resize(`s`);
+	        `a`.resize`s`);
 	        for (unsigned i = 0; i < `s`; i++)
 	            `a`[i] = y;
 	    >>>
@@ -174,6 +185,22 @@ module array(domain,range) = {
             >>>
         }
 
+        implement back {
+            <<<
+                if ((`domain`)`a`.size() > 0)
+                    `res` = `a`.back();
+            >>>
+#	    res := a.value(a.end.prev)
+	}
+
+        implement pop_back {
+	    <<<
+	        if (`a`.size() > 0) {
+	            a.pop_back();
+	        }
+            >>>
+	}
+
 	implement append {
 	    <<<
 	        `a`.push_back(`v`);
@@ -185,6 +212,15 @@ module array(domain,range) = {
                 for (unsigned i = 0; i < `b`.size(); i++)
 	            `a`.push_back(`b`[i]);
             >>>
+        }
+
+        implement reverse {
+	    <<<
+                for (unsigned i = 0; i < `a`.size()/2; i++) {
+                    std::swap(`a`[i],`a`[`a`.size()-i-1]);
+                }
+            >>>
+            
         }
 
         <<< impl

@@ -456,6 +456,9 @@ class EnumeratedSort(Sort):
         return '{' + ','.join(self.extension) + '}'
     def defines(self):
         return self.extension
+    @property
+    def rep(self):
+        return self
         
 
 
@@ -1256,7 +1259,7 @@ def str_subst(s,subst):
 #    return subst.get(s,s)
 
 def subst_subscripts_comp(s,subst):
-    if isinstance(s,This):
+    if isinstance(s,This) or s.startswith('"') :
         return s
     assert s!=None
 #    print 's: {} subst: {}'.format(s,subst)
@@ -1272,7 +1275,10 @@ def subst_subscripts_comp(s,subst):
         if len(g) > 1:
             raise iu.IvyError(None,'cannot substitute "this" for {} in {}'.format(g[0],s))
         return pref
-    res =  pref + ''.join(('[' + str_subst(x[1:-1],subst) + ']' if x.startswith('[') else x) for x in g[1:])
+    try:
+        res =  pref + ''.join(('[' + str_subst(x[1:-1],subst) + ']' if x.startswith('[') else x) for x in g[1:])
+    except:
+        print "s: {} subst : {}".format(s,subst)
 #    print "res: {}".format(res)
     return res
 
@@ -1315,7 +1321,7 @@ class AstRewriteSubstPrefix(object):
             return name
         return iu.compose_names(self.pref.rep,name)
     def rewrite_atom(self,atom,always=False):
-        if not(isinstance(atom.rep,This)):
+        if not(isinstance(atom.rep,This) or atom.rep.startswith('"')):
             g = name_parser.findall(atom.rep)
             if len(g) > 1:
                 n = g[0] + ''.join(('[' + self.prefix_str(x[1:-1],always) + ']' if x.startswith('[') else x) for x in g[1:])

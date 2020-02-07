@@ -291,6 +291,10 @@ def old_sym(sym,old):
     return sym.prefix('old_') if old else sym
 
 def compile_app(self,old=False):
+    if self.rep == "true" or self.rep == "false":
+        if len(self.args) > 0:
+            raise IvyError(self,"{} is not a function".format(self.rep))
+        return ivy_logic.And() if self.rep == "true" else ivy_logic.Or()
     with ReturnContext(None):
         args = [a.compile() for a in self.args]
     # handle action calls in rhs of assignment
@@ -605,6 +609,10 @@ def compile_if_action(self):
 IfAction.cmpl = compile_if_action
 
 def compile_while_action(self):
+        if isinstance(self.args[0],ivy_ast.Some):
+            res = compile_if_action(self.clone(self.args[:2]))
+            invars = map(sortify_with_inference,self.args[2:])
+            return res.clone(res.args+invars)
         ctx = ExprContext(lineno = self.lineno)
         with ctx:
             cond = sortify_with_inference(self.args[0])
@@ -1170,6 +1178,18 @@ class IvyDomainSetup(IvyDeclInterp):
 #            interp[lhs] = ivy_logic.EnumeratedSort(lhs,["{}:{}".format(i,lhs) for i in range(int(rhs.lo),int(rhs.hi)+1)])
             interp[lhs] = ivy_logic.EnumeratedSort(lhs,["{}".format(i) for i in range(int(rhs.lo),int(rhs.hi)+1)])
             return
+        if isinstance(rhs,ivy_ast.EnumeratedSort):
+            if lhs not in self.domain.sig.sorts:
+                iu.dbg('type(lhs)')
+                raise IvyError(thing,"{} is not a type".format(lhs))
+            sort = ivy_logic.EnumeratedSort(lhs,[x.rep for x in rhs.args])
+            interp[lhs] = sort
+            for c in sort.defines(): # register the type's constructors
+                sym = Symbol(c,self.domain.sig.sorts[lhs])
+                self.domain.functions[sym] = 0
+                self.domain.sig.symbols[c] = sym
+                self.domain.sig.constructors.add(sym)
+            return
         for x,y,z in zip([sig.sorts,sig.symbols],
                          [slv.is_solver_sort,slv.is_solver_op],
                          ['sort','symbol']):
@@ -1462,7 +1482,10 @@ def check_instantiations(mod,decls):
 
 
 def create_sort_order(mod):
-    arcs = [(x,s) for s in mod.sort_order for x in im.sort_dependencies(mod,s)]
+    arcs = [(x,s) for s in mod.sort_order for x in im.sort_dependencies(mod,s,with_variants=False)]
+    # # Remove arcs for recursive types. The first variant can't be recursive.
+    # variant_of = set((x.name,y) for y,l in mod.variants.iteritems() for x in l[1:])
+    # arcs = [a for a in arcs if a in variant_of]
     # do nothing if sccs already sorted
     number = dict((x,i) for i,x in enumerate(mod.sort_order))
     if all(x == 'bool' or number[x] < number[y] for x,y in arcs):
@@ -1525,6 +1548,8 @@ def check_definitions(mod):
     def checkdef(sym,lf):
         if sym in defs:
             raise IvyError(lf,'redefinition of {}\n{} from here'.format(sym,defs[sym].lineno))
+        if slv.solver_name(sym) == None:
+            raise IvyError(lf,'definition of interpreted symbol {}'.format(sym))
         defs[sym] = lf
     for ldf in mod.definitions:
         checkdef(ldf.formula.defines(),ldf)
@@ -1553,7 +1578,7 @@ def check_definitions(mod):
                         raise IvyError(side_effects[s],'immutable symbol assigned. \n{} info: symbol is used in axiom here'.format(lf.lineno))
 
         for lf in mod.definitions:
-            s = lf.formula.lhs()
+            s = lf.formula.lhs().rep
             if s in side_effects:
                 raise IvyError(side_effects[s],'immutable symbol assigned. \n{} Symbol is defined here'.format(lf.lineno))
                 
