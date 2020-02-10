@@ -1337,9 +1337,9 @@ def pretty_fmla(self):
     d = self.drop_annotations(False,set())
     return d.ugly()
 
-for cls in [lg.Eq, lg.Not, lg.And, lg.Or, lg.Implies, lg.Iff, lg.Ite, lg.ForAll, lg.Exists,
-            lg.Apply, lg.Var, lg.Const, lg.Lambda, lg.NamedBinder]:
-    cls.__str__ = pretty_fmla
+# for cls in [lg.Eq, lg.Not, lg.And, lg.Or, lg.Implies, lg.Iff, lg.Ite, lg.ForAll, lg.Exists,
+#             lg.Apply, lg.Var, lg.Const, lg.Lambda, lg.NamedBinder]:
+#     cls.__str__ = pretty_fmla
 
 # end string conversion stuff
 
