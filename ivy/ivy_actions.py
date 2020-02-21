@@ -183,7 +183,7 @@ class Action(AST):
                 clauses = and_clauses(clauses,transrel)
             if precond is not None:
                 pre = or_clauses(pre,precond)
-##        print "update clauses: %s" % clauses
+#         print "update clauses: %s" % clauses
         res = (updated,clauses,pre)
         return res
     def update(self,domain,in_scope):

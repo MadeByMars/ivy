@@ -957,7 +957,6 @@ def isolate_component(mod,isolate_name,extra_with=[],extra_strip=None,after_init
                 mod.isolate_info.monitors.append((mixin.mixer(),mixin.mixee(),mod.actions[mixin.mixer()]))
             
 
-
     # figure out what is exported:
     exported = set()
     export_preconds = defaultdict(list)
@@ -1145,9 +1144,6 @@ def isolate_component(mod,isolate_name,extra_with=[],extra_strip=None,after_init
     mod.definitions = [c for c in mod.definitions if keep_ax(c.label) and c.formula.args[0].rep in all_syms]
     mod.native_definitions = [c for c in mod.native_definitions if keep_ax(c.label) and c.formula.args[0].rep in all_syms]
 
-
-
-
     # After checking, we can put in place the new action definitions
 
     old_actions = dict()
@@ -1279,7 +1275,6 @@ def isolate_component(mod,isolate_name,extra_with=[],extra_strip=None,after_init
 
     init_cond = ivy_logic.And(*(lf.formula for lf in mod.labeled_inits))
     mod.init_cond = lu.formula_to_clauses(init_cond)
-
 
 
 class SortOrder(object):

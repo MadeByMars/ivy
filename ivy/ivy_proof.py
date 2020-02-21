@@ -415,7 +415,6 @@ def normalize_goal(x):
         return x
     return clone_goal(x,map(normalize_goal,goal_prems(x)),il.normalize_ops(goal_conc(x)))
 
-
 def get_unprovided_defns(g1,g2):
     defns = goal_defns(g2)
     res = []
