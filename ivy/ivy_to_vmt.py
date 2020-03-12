@@ -26,9 +26,8 @@ def fprint(s):
     global outF
     outF.write(s + "\n")
 
-
 for cls in [lg.Eq, lg.Not, lg.And, lg.Or, lg.Implies, lg.Iff, lg.Ite, lg.ForAll, lg.Exists,
-            lg.Apply, lg.Var, lg.Const, lg.Lambda, lg.NamedBinder]:
+            lg.Apply, lg.Var, lg.Const, lg.Lambda, lg.NamedBinder, lg.EnumeratedSort, lg.Const]:
     if hasattr(cls,'__vmt__'):
         cls.__str__ = cls.__vmt__
 
@@ -50,6 +49,7 @@ class print_module_vmt():
         self.defn_labels = []
         self.str = {}
         self.vmt = {}
+        self.distincts = []
         self.prefix = "__"
         self.execute()
 
@@ -65,7 +65,7 @@ class print_module_vmt():
             assert(0)
         if len(self.mod.sig.interp) != 0:
             print("sig.interp: %s" % str(self.mod.sig.interp))
-            assert(0)
+#            assert(0)
 
         if len(self.mod.definitions) != 0:
 #             print("definitions: %s" % str(self.mod.definitions))
@@ -87,7 +87,7 @@ class print_module_vmt():
     def print_vmt(self):
         global outF, outFile
         outF = open(outFile, 'w')
-        
+
         for s in self.sorts.keys():
             fprint(self.str[str(s)])
         fprint("")
@@ -103,7 +103,7 @@ class print_module_vmt():
         fprint("")
         for pre in self.pre:
             nex = self.pre2nex[pre]
-            fprint(self.str[str(pre)+str(nex)])
+            fprint(self.str[str(pre) + str(nex)])
         fprint("")
         if len(self.glo) != 0:
             for g in self.glo:
@@ -111,6 +111,7 @@ class print_module_vmt():
             fprint("")
             for g in self.glo:
                 pre = self.nex2pre[g]
+#TODO: fix global
                 fprint(self.str[str(pre)+str(g)])
             fprint("")
         if len(self.vars) != 0:
@@ -124,6 +125,8 @@ class print_module_vmt():
         fprint(self.get_vmt_string("$prop"))
         fprint("")
         if len(self.mod.labeled_axioms) != 0:
+            f, name, suffix, value = self.vmt["$axiom"]
+            self.vmt["$axiom"] = ("(and %s %s)"%(f, ' '.join(self.distincts)), name, suffix, value)
             fprint(self.get_vmt_string("$axiom"))
             fprint("")
         fprint(self.get_vmt_string("$init"))
@@ -139,17 +142,26 @@ class print_module_vmt():
         for name,sort in ivy_logic.sig.sorts.iteritems():
             if name == 'bool':
                 continue
-            if not isinstance(sort,UninterpretedSort):
+            if isinstance(sort, lg.EnumeratedSort):
+                print 'enumerated sort', str(sort), type(sort)
+                n = len(sort.extension)
+                print type(sort.extension[0])
+                for i in range(1, n):
+                    for j in range(i):
+                        print str(sort.extension[i]), type(sort.extension[j])
+                        self.distincts.append('(not (= %s_%s %s_%s))'% (sort.name, sort.extension[i], sort.name, sort.extension[j]))
+            elif not isinstance(sort,UninterpretedSort):
+                print 'not uninterpreted sort', str(sort), type(sort), isinstance(sort, lg.EnumeratedSort)
                 assert("todo")
             res = ''
             res += '(declare-sort {} 0)'.format(name)
             self.sorts[sort] = 0
             self.str[str(sort)] = res
-            
         for name,sym in ivy_logic.sig.symbols.iteritems():
             if isinstance(sym.sort,UnionSort):
+                print 'Union sort!', name, sym.sort
+                continue
                 assert("todo")
-            
             psym = sym.prefix('__')
             nsym = sym
             self.pre.add(psym)
@@ -159,7 +171,7 @@ class print_module_vmt():
             self.allvars.add(psym)
             self.allvars.add(nsym)
             
-            self.add_constant(sym, True)       
+            self.add_constant(sym, True)
     
     def process_defs_v0(self):
         for lf in self.definitions:
@@ -277,13 +289,15 @@ class print_module_vmt():
         self.vmt["$init"] = res
         
     def process_actions(self):
-        for name, action in self.mod.actions.iteritems():
-#             print(type(action))
-#             print ("action2: ", ia.action_def_to_str(name, action))
+#        print self.mod.public_actions
+        for name in self.mod.public_actions:
+            action = ia.env_action(name)
+#            print (type(action))
+#            print ("action2: ", ia.action_def_to_str(name, action))
             ag = ivy_art.AnalysisGraph()
             pre = itp.State()
             pre.clauses = lut.true_clauses()
-#             print(pre.to_formula())
+#            print(pre.to_formula())
             post = ag.execute(action, pre)
             history = ag.get_history(post)
             clauses = lut.and_clauses(history.post)
@@ -300,6 +314,7 @@ class print_module_vmt():
             actname = "action_" + name
             self.actions.add(actname)
             res = (sf, actname, "action", name)
+#            print 'result: ', res
             self.vmt[actname] = res
 
     def process_global(self):
@@ -343,7 +358,7 @@ class print_module_vmt():
     def add_new_constants(self, f):
         cons = lgu.used_constants(f)
         for c in cons:
-            if c not in self.allvars:
+            if c not in self.allvars and c.name != '>' and c.name != '>=' and c.name != '<=':
                 self.add_constant(c, False)
                 self.vars.add(c)
                 self.allvars.add(c)
@@ -365,6 +380,7 @@ class print_module_vmt():
             suffix += ' Bool'
         suffix += ')'
         self.str[name] = prefix + name + suffix
+#       print name, self.str[name]
         
         if addPre:
             psym = self.nex2pre[sym]
@@ -390,6 +406,8 @@ class print_module_vmt():
             prenex += ' :next ' + name + '))'
             self.str[prename] = prefix + prename + suffix
             self.str[prename+name] = prenex
+#            print prename, self.str[prename]
+#            print prename+name, self.str[prename+name]
             
     def add_definition(self, label, sym, args, rhs):   
         sort = sym.sort
@@ -484,7 +502,14 @@ def print_isolate():
         return
 
 def print_module():
-    isolates = sorted(list(im.module.isolates))
+    isolate = ivy_compiler.isolate.get()
+    if isolate != None:
+        isolates = [isolate]
+    else:
+        isolates = sorted(list(im.module.isolates))
+        if len(isolates) == 0:
+            isolates = [None]
+
     if len(isolates) != 1:
         raise iu.IvyError(None,"Expected exactly one isolate, got %s" % len(isolates))
 

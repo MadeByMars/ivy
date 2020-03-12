@@ -56,6 +56,8 @@ class EnumeratedSort(recstruct('EnumeratedSort', ['name','extension'], [])):
         return name,extension
     def __str__(self):
         return '{' + ','.join(self.extension) + '}'
+    def __vmt__(self):
+        return self.name
     @property
     def constructors(self):
         return [Const(n,self) for n in self.extension]
@@ -128,6 +130,11 @@ class Const(recstruct('Const', ['name', 'sort'], [])):
         return name, sort
     def __str__(self):
         return self.name
+    def __vmt__(self):
+        if isinstance(self.sort, FunctionSort):
+            return '{}_{}_{}'.format(str(self.sort.rng), self.name, '_'.join([str(s) for s in self.sort.domain]))
+        else:
+            return '{}_{}'.format(str(self.sort.rng), self.name)
     def __call__(self, *terms):
         return Apply(self, *terms) if len(terms) > 0 else self
 
@@ -171,10 +178,23 @@ class Apply(recstruct('Apply', [], ['func', '*terms'])):
         if len(self.terms) == 0:
             return str(self.func)
         else:
-            return '({} {})'.format(
-                str(self.func),
-                ' '.join(str(t) for t in self.terms)
-            )
+            if self.func.name == '>':
+                return '({} {} {})'.format(str(self.func).replace('>', '<', 1),
+                        self.terms[1], self.terms[0]
+                        )
+            elif self.func.name == '>=':
+                return '(not ({} {} {}))'.format(str(self.func).replace('>=', '<', 1),
+                        self.terms[0], self.terms[1]
+                        )
+            elif self.func.name == '<=':
+                return '(not ({} {} {}))'.format(str(self.func).replace('<=', '<', 1),
+                            self.terms[1], self.terms[0]
+                            )
+            else:
+                return '({} {})'.format(
+                    str(self.func),
+                    ' '.join(str(t) for t in self.terms)
+                        )
 
     sort = property(lambda self: TopS if self.func.sort == TopS else
                     self.func.sort.range)
