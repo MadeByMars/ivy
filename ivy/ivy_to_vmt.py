@@ -1,5 +1,4 @@
 import sys
-#sys.path.insert(0, "/home/rock/ws/version/github/aman_goel/latest/ivy/ivy")
 
 import ivy_logic
 import ivy_utils as iu
@@ -19,8 +18,8 @@ import ivy_utils as utl
 import ivy_compiler
 import ivy_isolate
 import ivy_ast
+from collections import defaultdict
 
-outFile = "out.vmt"
 outF = None
 def fprint(s):
     global outF
@@ -72,7 +71,7 @@ class print_module_vmt():
             for defn in self.mod.definitions:
                 self.definitions.add(defn)
             self.mod.definitions = []
-            
+
         with self.mod.theory_context():
             self.process_sig()
             self.process_defs()
@@ -80,13 +79,14 @@ class print_module_vmt():
             self.process_axiom()
             self.process_init()
             self.process_actions()
+#            self.process_guarantee()
             self.process_global()
     
             self.print_vmt()
-            
+    
     def print_vmt(self):
-        global outF, outFile
-        outF = open(outFile, 'w')
+        global outF
+        outF = sys.stdout
 
         for s in self.sorts.keys():
             fprint(self.str[str(s)])
@@ -143,15 +143,15 @@ class print_module_vmt():
             if name == 'bool':
                 continue
             if isinstance(sort, lg.EnumeratedSort):
-                print 'enumerated sort', str(sort), type(sort)
+                print >> sys.stderr, 'enumerated sort', str(sort), type(sort)
                 n = len(sort.extension)
-                print type(sort.extension[0])
+                print >> sys.stderr, type(sort.extension[0])
                 for i in range(1, n):
                     for j in range(i):
-                        print str(sort.extension[i]), type(sort.extension[j])
+                        print >> sys.stderr, str(sort.extension[i]), type(sort.extension[j])
                         self.distincts.append('(not (= %s_%s %s_%s))'% (sort.name, sort.extension[i], sort.name, sort.extension[j]))
             elif not isinstance(sort,UninterpretedSort):
-                print 'not uninterpreted sort', str(sort), type(sort), isinstance(sort, lg.EnumeratedSort)
+                print >> sys.stderr, 'not uninterpreted sort', str(sort), type(sort), isinstance(sort, lg.EnumeratedSort)
                 assert("todo")
             res = ''
             res += '(declare-sort {} 0)'.format(name)
@@ -159,7 +159,7 @@ class print_module_vmt():
             self.str[str(sort)] = res
         for name,sym in ivy_logic.sig.symbols.iteritems():
             if isinstance(sym.sort,UnionSort):
-                print 'Union sort!', name, sym.sort
+                print >> sys.stderr, 'Union sort!', name, sym.sort
                 continue
                 assert("todo")
             psym = sym.prefix('__')
@@ -316,6 +316,30 @@ class print_module_vmt():
             res = (sf, actname, "action", name)
 #            print 'result: ', res
             self.vmt[actname] = res
+
+    def process_guarantee(self):
+        callgraph = defaultdict(list)
+        for actname,action in self.mod.actions.iteritems():
+            for called_name in action.iter_calls():
+                callgraph[called_name].append(actname)
+        for actname,action in self.mod.actions.iteritems():
+            guarantees = [sub for sub in action.iter_subactions() if isinstance(sub, (ia.AssertAction, ia.Ranking))]
+            if guarantees:
+                callers = callgraph[actname]
+                roots = set(iu.reachable([actname], lambda x: callgraph[x]))
+                for sub in guarantees:
+                    for root in roots:
+                        if root in self.mod.public_actions:
+                            action = ia.env_action(root)
+                            ag = ivy_art.AnalysisGraph()
+                            pre = itp.State()
+                            pre.clauses = lut.true_clauses()
+                            post = ag.execute(action,prestate=pre)
+                            fail = itp.State(expr = itp.fail_expr(post.expr))
+                            print post
+                            print fail
+        exit(0)
+
 
     def process_global(self):
         for n in self.nex:
@@ -519,30 +543,31 @@ def print_module():
             if len(idef.verified()) == 0 or isinstance(idef,ivy_ast.TrustedIsolateDef):
                 continue # skip if nothing to verify
         if isolate:
-            print "\nPrinting isolate {}:".format(isolate)
+                print >> sys.stderr, "\nPrinting isolate {}:".format(isolate)
         with im.module.copy():
             ivy_isolate.create_isolate(isolate) # ,ext='ext'
             print_isolate()
 
 def usage():
-    print "usage: \n  {} file.ivy output.vmt".format(sys.argv[0])
+    print >> sys.stderr, "usage: \n  {} file.ivy output.vmt".format(sys.argv[0])
     sys.exit(1)
 
 def main():
-    global outFile
     import signal
     signal.signal(signal.SIGINT,signal.SIG_DFL)
     import ivy_alpha
     ivy_alpha.test_bottom = False # this prevents a useless SAT check
     ivy_init.read_params()
-    if len(sys.argv) != 3 or not sys.argv[1].endswith('ivy'):
+    if len(sys.argv) < 2 or not sys.argv[1].endswith('ivy'):
         usage()
+    for i in range(2, len(sys.argv)):
+        st = sys.argv[i].split('=')
+        instance[st[0]] = eval(st[1])
     with im.Module():
         with utl.ErrorPrinter():
             ivy_init.source_file(sys.argv[1],ivy_init.open_read(sys.argv[1]),create_isolate=False)
-            outFile = sys.argv[2]
             print_module()
-    print "OK"
+    print >> sys.stderr, "OK"
 
 
 if __name__ == "__main__":
