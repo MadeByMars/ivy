@@ -25,6 +25,8 @@ def fprint(s):
     global outF
     outF.write(s + "\n")
 
+instance = {}
+
 for cls in [lg.Eq, lg.Not, lg.And, lg.Or, lg.Implies, lg.Iff, lg.Ite, lg.ForAll, lg.Exists,
             lg.Apply, lg.Var, lg.Const, lg.Lambda, lg.NamedBinder, lg.EnumeratedSort, lg.Const]:
     if hasattr(cls,'__vmt__'):
@@ -32,6 +34,9 @@ for cls in [lg.Eq, lg.Not, lg.And, lg.Or, lg.Implies, lg.Iff, lg.Ite, lg.ForAll,
 
 class print_module_vmt():
     def __init__(self, mod):
+        global instance
+        self.instance = instance
+        self.used = set()
         self.mod = mod
         self.sorts = {}
         self.pre = set()
@@ -48,7 +53,7 @@ class print_module_vmt():
         self.defn_labels = []
         self.str = {}
         self.vmt = {}
-        self.distincts = []
+        self.axioms = []
         self.prefix = "__"
         self.execute()
 
@@ -80,23 +85,32 @@ class print_module_vmt():
             self.process_init()
             self.process_actions()
 #            self.process_guarantee()
-            self.process_global()
     
             self.print_vmt()
     
     def print_vmt(self):
         global outF
         outF = sys.stdout
+        fprint(
+'''(set-info :source |Haojun Ma (mahaojun@umich.edu)|)
 
-        for s in self.sorts.keys():
-            fprint(self.str[str(s)])
-        fprint("")
+; Typecast bit to bool
+(define-sort bool_type () (_ BitVec 1)) 
+(define-fun bv_false () bool_type (_ bv0 1)) 
+(define-fun bv_true  () bool_type (_ bv1 1)) 
+(define-fun is_bool ((x bool_type)) Bool (or (= x bv_true) (= x bv_false)))
+
+; Define and enumerate transition system parameters'''
+)
         for s, v in self.sorts.iteritems():
-            self.print_sort_size(str(s), v)
-        fprint("")
+            fprint('(define-sort %s_type () (_ BitVec %d))' % (s, v))
+            for i in range(self.instance[s]):
+                fprint('(define-fun %s%d () %s_type (_ bv%d %d))' % (s, i, s, i, v))
+            fprint('(define-fun is_%s ((%s %s_type)) Bool (or %s))'%(s, s, s, ' '.join(["(= %s %s%d)" % (s, s, i) for i in range(self.instance[s])])))
+        fprint("\n; Declare transition system states")
         for pre in self.pre:
             fprint(self.str[str(pre)])
-        fprint("")
+        fprint("\n; Declare next states")
         for pre in self.pre:
             nex = self.pre2nex[pre]
             fprint(self.str[str(nex)])
@@ -104,39 +118,46 @@ class print_module_vmt():
         for pre in self.pre:
             nex = self.pre2nex[pre]
             fprint(self.str[str(pre) + str(nex)])
-        fprint("")
-        if len(self.glo) != 0:
-            for g in self.glo:
-                fprint(self.str[str(g)])
-            fprint("")
-            for g in self.glo:
-                pre = self.nex2pre[g]
-#TODO: fix global
-                fprint(self.str[str(pre)+str(g)])
-            fprint("")
+# no global
+#        if len(self.glo) != 0:
+#            fprint("")
+#            for g in self.glo:
+#                fprint(self.str[str(g)])
+#            fprint("")
+#            for g in self.glo:
+#                pre = self.nex2pre[g]
+#                fprint(self.str[str(pre)+str(g)])
         if len(self.vars) != 0:
+            fprint("\n; Declare local variables")
             for v in self.vars:
                 fprint(self.str[str(v)])
-            fprint("")
-        for h in self.defn_labels:
+#        for h in self.defn_labels:
+#            fprint("")
 #            fprint(self.get_vmt_string_def(h))
-            fprint(self.get_vmt_string(h))
-            fprint("")
+#            fprint(self.get_vmt_string(h))
+        fprint("\n; Safety property")
         fprint(self.get_vmt_string("$prop"))
-        fprint("")
+        fprint("\n; Declare axioms")
         if len(self.mod.labeled_axioms) != 0:
             f, name, suffix, value = self.vmt["$axiom"]
-            self.vmt["$axiom"] = ("(and %s %s)"%(f, ' '.join(self.distincts)), name, suffix, value)
-            fprint(self.get_vmt_string("$axiom"))
-            fprint("")
+            fprint('(define-fun my_axioms () Bool\n(and %s\n%s)\n)' % (f.instantiation(self.instance, {}), ' '.join(self.axioms)))
+        else:
+            fprint('(define-fun my_axioms () Bool\n(and true\n%s)\n)' % (' '.join(self.axioms)))
+        fprint("\n; Declare initial states")
         fprint(self.get_vmt_string("$init"))
-        fprint("")
+        fprint("\n; Declare actions")
         for actname in self.actions:
-            fprint(self.get_vmt_string(actname))
             fprint("")
-        for h in sorted(self.helpers.keys()):
-            fprint(self.get_vmt_string(h))
+            fprint(self.vmt[actname])
             fprint("")
+        copies = []
+        for var in self.nex:
+            copies += self.copy_constant(var)
+        fprint("(define-fun .trans () Bool (! (and (or %s \n(and %s))\n my_axioms) \n:trans true))"%(' '.join(self.actions), ' '.join(copies)))
+#        for h in sorted(self.helpers.keys()):
+#            fprint(self.get_vmt_string(h))
+#            fprint("")
+        
         
     def process_sig(self):
         for name,sort in ivy_logic.sig.sorts.iteritems():
@@ -149,14 +170,15 @@ class print_module_vmt():
                 for i in range(1, n):
                     for j in range(i):
                         print >> sys.stderr, str(sort.extension[i]), type(sort.extension[j])
-                        self.distincts.append('(not (= %s_%s %s_%s))'% (sort.name, sort.extension[i], sort.name, sort.extension[j]))
+                        self.axioms.append('(not (= %s_%s %s_%s))'% (sort.name, sort.extension[i], sort.name, sort.extension[j]))
             elif not isinstance(sort,UninterpretedSort):
                 print >> sys.stderr, 'not uninterpreted sort', str(sort), type(sort), isinstance(sort, lg.EnumeratedSort)
                 assert("todo")
-            res = ''
-            res += '(declare-sort {} 0)'.format(name)
-            self.sorts[sort] = 0
-            self.str[str(sort)] = res
+            for i in range(2, 32):
+                if 2**i >= instance[name] and i not in self.used:
+                    break
+            self.used.add(i)
+            self.sorts[name] = i
         for name,sym in ivy_logic.sig.symbols.iteritems():
             if isinstance(sym.sort,UnionSort):
                 print >> sys.stderr, 'Union sort!', name, sym.sort
@@ -194,6 +216,7 @@ class print_module_vmt():
 #             print(type(lf.formula))
 #             print(lf.formula)
             sym = lf.formula.defines()
+            print >> sys.stderr, "def!", sym
             label = "def_" + str(sym)
             lhs = lf.formula.lhs()
             rhs = lf.formula.rhs()
@@ -245,6 +268,8 @@ class print_module_vmt():
         for lf in self.mod.labeled_conjs:
             label = str(lf.label)
             if label.startswith("help_"):
+                print >>sys.stderr, "help", lf
+                assert False
                 helpers.append(lf)
             else:
                 fmlas.append(lf.formula)
@@ -284,7 +309,7 @@ class print_module_vmt():
         clauses = lut.and_clauses(*init_cl)
         f = self.get_formula(clauses)
         pref = lgu.substitute(f, self.nex2pre)
-        self.add_new_constants(pref)
+        self.add_new_constants(pref, True)
         res = (pref, "init", "init", "true")
         self.vmt["$init"] = res
         
@@ -309,13 +334,17 @@ class print_module_vmt():
             
             update = action.update(pre.domain,pre.in_scope)
             sf = self.standardize_action(f, update[0], name)
+
+            copies = []
+            for var in self.nex:
+                if var not in update[0]:
+                    copies += self.copy_constant(var)
             self.add_new_constants(sf)
             
-            actname = "action_" + name
+            actname = ("action_" + name).replace(":", "_")
             self.actions.add(actname)
-            res = (sf, actname, "action", name)
 #            print 'result: ', res
-            self.vmt[actname] = res
+            self.vmt[actname] = ("(define-fun %s () Bool \n(and %s\n%s)\n)" % (actname, sf.instantiation(self.instance, {}), ' '.join(copies))).replace(":", "_")
 
     def process_guarantee(self):
         callgraph = defaultdict(list)
@@ -339,7 +368,6 @@ class print_module_vmt():
                             print post
                             print fail
         exit(0)
-
 
     def process_global(self):
         for n in self.nex:
@@ -375,63 +403,91 @@ class print_module_vmt():
         if len(subs) == 0:
             return f
         else:
-#             for k, v in subs.iteritems():
+#            for k, v in subs.iteritems():
 #                 print("\treplacing %s -> %s in %s" % (k, v, name))
             return lgu.substitute(f, subs)
   
-    def add_new_constants(self, f):
+    def add_new_constants(self, f, addPre = False):
         cons = lgu.used_constants(f)
         for c in cons:
             if c not in self.allvars and c.name != '>' and c.name != '>=' and c.name != '<=':
-                self.add_constant(c, False)
-                self.vars.add(c)
-                self.allvars.add(c)
+                print >> sys.stderr, "local variable %s" % (c.name)
+                if addPre:
+                    assert False, "new variable %s in init" % (c.name)
+                    psym = c
+                    nsym = c.prefix("new_")
+                    self.pre.add(psym)
+                    self.nex.add(nsym)
+                    self.pre2nex[psym] = nsym
+                    self.nex2pre[nsym] = psym
+                    self.allvars.add(psym)
+                    self.allvars.add(nsym)
+                else:
+                    self.vars.add(c)
+                    self.allvars.add(c)
+                    nsym = c
+
+                self.add_constant(nsym, addPre)
                 
     def add_constant(self, sym, addPre):   
         sort = sym.sort
         name = str(sym)
-        prefix = ''
-        prefix +=  '(declare-fun '
-            
-        suffix = ''
-        suffix += " ("
+        names = [name.replace(":", "_")]
         if sort.dom:
-            suffix += ' '.join('{}'.format(s) for idx,s in enumerate(sort.dom))
-        suffix += ")"
+            for s in sort.dom:
+                tmp = []
+                for i in range(self.instance[str(s)]):
+                    tmp += ['%s%d_%s'%(s, i, n) for n in names]
+                names = tmp
+
+        st = '(declare-fun %s ()'
         if not sort.is_relational():
-            suffix += ' {}'.format(sort.rng)
+            st += ' {}_type)'.format(sort.rng)
+            self.axioms += ["(is_%s %s)" % (sort.rng, n) for n in names]
         else:
-            suffix += ' Bool'
-        suffix += ')'
-        self.str[name] = prefix + name + suffix
-#       print name, self.str[name]
+            st += ' bool_type)'
+
+        self.str[name] = '\n'.join([st%(n) for n in names])
+#        print name
+#        print self.str[name]
         
         if addPre:
             psym = self.nex2pre[sym]
             prename = str(psym)
-            prenex = ''
-            prenex +=  '(define-fun '
-            prenex +=  '.' + name
-            prenex += " ("
+            prenames = [prename]
             if sort.dom:
-                prenex += ' '.join('(V{} {})'.format(idx, s) for idx,s in enumerate(sort.dom))
-            prenex += ")"
+                for s in sort.dom:
+                    tmp = []
+                    for i in range(self.instance[str(s)]):
+                        tmp += ['%s%d_%s'%(s, i, n) for n in prenames]
+                    prenames = tmp
+            self.str[prename] = '\n'.join([st%(n) for n in prenames])
+            
+            prenex = '(define-fun .%s ()'
             if not sort.is_relational():
-                prenex += ' {}'.format(sort.rng)
+                prenex += ' {}_type'.format(sort.rng)
             else:
-                prenex += ' Bool'
-            prenex += ' (! '
-            if sort.dom:
-                prenex += '(' + prename + ' '
-                prenex += ' '.join('V{}'.format(idx) for idx,s in enumerate(sort.dom))
-                prenex += ')'
-            else:
-                prenex += prename
-            prenex += ' :next ' + name + '))'
-            self.str[prename] = prefix + prename + suffix
-            self.str[prename+name] = prenex
+                prenex += ' bool_type'
+            prenex += ' (! %s :next %s))'
+            self.str[prename+name] = '\n'.join([prenex%(n1, n1, n2) for n1, n2 in zip(prenames, names)])
 #            print prename, self.str[prename]
 #            print prename+name, self.str[prename+name]
+
+    def copy_constant(self, sym):
+        ret = []
+        psym = self.nex2pre[sym]
+        names = [str(sym)]
+        prenames = [str(psym)]
+        if sym.sort.dom:
+            for s in sym.sort.dom:
+                tmp    = []
+                pretmp = []
+                for i in range(self.instance[str(s)]):
+                    tmp    += ['%s%d_%s'%(s, i, n) for n in names]
+                    pretmp += ['%s%d_%s'%(s, i, n) for n in prenames]
+                names = tmp
+                prenames = pretmp
+        return ["(= %s %s)" % (name, prename) for name, prename in zip(names, prenames)]
             
     def add_definition(self, label, sym, args, rhs):   
         sort = sym.sort
@@ -488,7 +544,7 @@ class print_module_vmt():
         f, name, suffix, value = self.vmt[k]
         res = '(define-fun .' + name + ' () Bool (! \n'
         res += ' (let (($v '
-        res += str(f)
+        res += f.instantiation(self.instance, {}).replace(":", "_")
         res += '\n ))\n (and $v))'
         res += '\n :' + suffix + ' ' + value + '))'
         return res
