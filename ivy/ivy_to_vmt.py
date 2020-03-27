@@ -20,12 +20,10 @@ import ivy_isolate
 import ivy_ast
 from collections import defaultdict
 
-outF = None
+outF = sys.stdout
 def fprint(s):
     global outF
     outF.write(s + "\n")
-
-instance = {}
 
 for cls in [lg.Eq, lg.Not, lg.And, lg.Or, lg.Implies, lg.Iff, lg.Ite, lg.ForAll, lg.Exists,
             lg.Apply, lg.Var, lg.Const, lg.Lambda, lg.NamedBinder, lg.EnumeratedSort, lg.Const]:
@@ -33,9 +31,9 @@ for cls in [lg.Eq, lg.Not, lg.And, lg.Or, lg.Implies, lg.Iff, lg.Ite, lg.ForAll,
         cls.__str__ = cls.__vmt__
 
 class print_module_vmt():
-    def __init__(self, mod):
-        global instance
-        self.instance = instance
+    def __init__(self, mod, inst):
+        self.instance = {}
+        self.concretizations = []
         self.used = set()
         self.mod = mod
         self.sorts = {}
@@ -55,7 +53,21 @@ class print_module_vmt():
         self.vmt = {}
         self.axioms = []
         self.prefix = "__"
+        self.read_instance(open(inst, 'r'))
         self.execute()
+
+    def read_instance(self, fi):
+        n = eval(fi.readline())
+        for i in range(n):
+            st = fi.readline().split('=')
+            self.instance[st[0]] = eval(st[1])
+        fi.readline()
+        n = eval(fi.readline())
+        for i in range(n):
+            st = fi.readline()[:-1]
+            self.concretizations.append(st)
+            s = st.split('=')
+            self.axioms.append('(= %s %s)' % (s[0], s[1]))
 
     def execute(self):
         if len(self.mod.labeled_props) != 0:
@@ -87,10 +99,9 @@ class print_module_vmt():
 #            self.process_guarantee()
     
             self.print_vmt()
+            self.print_config()
     
     def print_vmt(self):
-        global outF
-        outF = sys.stdout
         fprint(
 '''(set-info :source |Haojun Ma (mahaojun@umich.edu)|)
 
@@ -158,6 +169,25 @@ class print_module_vmt():
 #            fprint(self.get_vmt_string(h))
 #            fprint("")
         
+    def print_config(self):
+        fo = open('config.txt', 'w')
+        print >>fo, len(self.pre)
+        for pre in self.pre:
+            var = self.pre2nex[pre]
+            if var.sort.dom:
+                st = "%d %s %s %s" % (len(var.sort.dom), str(var.sort.rng).upper(), var.name, ' '.join([str(s).upper() for s in var.sort.dom]))
+            else:
+                st = "0 %s %s" % (str(var.sort.name).upper(), var.name)
+            print >>fo, st
+
+        print >>fo
+        print >>fo, len(self.sorts)
+        for k in self.sorts:
+            print >> fo, k.upper(), self.sorts[k]
+        print >>fo
+        print >>fo, len(self.concretizations)
+        for k in self.concretizations:
+            print >>fo, k
         
     def process_sig(self):
         for name,sort in ivy_logic.sig.sorts.iteritems():
@@ -175,7 +205,7 @@ class print_module_vmt():
                 print >> sys.stderr, 'not uninterpreted sort', str(sort), type(sort), isinstance(sort, lg.EnumeratedSort)
                 assert("todo")
             for i in range(2, 32):
-                if 2**i >= instance[name] and i not in self.used:
+                if 2**i >= self.instance[name] and i not in self.used:
                     break
             self.used.add(i)
             self.sorts[name] = i
@@ -564,7 +594,7 @@ class print_module_vmt():
         fprint(res)
     
 
-def print_isolate():
+def print_isolate(inst):
     temporals = [p for p in im.module.labeled_props if p.temporal]
     mod = im.module
     if temporals:
@@ -575,13 +605,13 @@ def print_isolate():
         mod.concept_spaces = []
         mod.update_conjs()
 #     ifc.check_fragment()
-    print_module_vmt(mod)
+    print_module_vmt(mod, inst)
     with im.module.theory_context():
 #         ip.print_module(mod)
         pass
         return
 
-def print_module():
+def print_module(inst):
     isolate = ivy_compiler.isolate.get()
     if isolate != None:
         isolates = [isolate]
@@ -602,11 +632,12 @@ def print_module():
                 print >> sys.stderr, "\nPrinting isolate {}:".format(isolate)
         with im.module.copy():
             ivy_isolate.create_isolate(isolate) # ,ext='ext'
-            print_isolate()
+            print_isolate(inst)
 
 def usage():
-    print >> sys.stderr, "usage: \n  {} file.ivy output.vmt".format(sys.argv[0])
+    print >> sys.stderr, "usage: \n  {} file.ivy instance_specification".format(sys.argv[0])
     sys.exit(1)
+
 
 def main():
     import signal
@@ -614,15 +645,12 @@ def main():
     import ivy_alpha
     ivy_alpha.test_bottom = False # this prevents a useless SAT check
     ivy_init.read_params()
-    if len(sys.argv) < 2 or not sys.argv[1].endswith('ivy'):
+    if len(sys.argv) != 3 or not sys.argv[1].endswith('ivy'):
         usage()
-    for i in range(2, len(sys.argv)):
-        st = sys.argv[i].split('=')
-        instance[st[0]] = eval(st[1])
     with im.Module():
         with utl.ErrorPrinter():
             ivy_init.source_file(sys.argv[1],ivy_init.open_read(sys.argv[1]),create_isolate=False)
-            print_module()
+            print_module(sys.argv[2])
     print >> sys.stderr, "OK"
 
 
