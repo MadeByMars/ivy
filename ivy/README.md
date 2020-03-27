@@ -1,6 +1,32 @@
 A tour of the code:
 ===================
 
+ivy_to_vmt
+----------
+- ivy_to_vmt.py: translate ivy to a finite vmt module
+```
+python ivy_to_vmt.py isolate={iso} ivy_file.ivy {inst.txt} > {vmtfile}
+```
+This will also create config.txt for generalization.
+
+- inst.txt: specify an instant to translate.
+```
+# of sorts
+sort1=...
+sort2=...
+
+# or concretizations
+var1=...
+var2=...
+```
+
+I4 loop
+-------
+- main.py: generalize the inductive invariant from AVR and check it with Ivy.
+```
+python main.py {path_to_module} {invariant.txt} {path_to_config.txt}
+```
+
 Utilities
 ---------
 
