@@ -120,8 +120,14 @@ class Var(recstruct('Var', ['name', 'sort'], [])):
     def __call__(self, *terms):
         return Apply(self, *terms) if len(terms) > 0 else self
     def instantiation(self, instances, replace):
+        if self.name == '0' or self.name == '__0':
+            assert False, "0 is a var"
         if self.name in replace:
             return replace[self.name]
+        if not isinstance(self.sort, FunctionSort): 
+            return '%s_%s' % (str(self.sort), self.name)
+        else:
+            return self.name
         if isinstance(self.sort, BooleanSort):
             return "(= %s bv_true)" % (self.name)
         else:
@@ -135,7 +141,16 @@ class Const(recstruct('Const', ['name', 'sort'], [])):
 #            raise IvyError("Bad constant name: {!r}".format(name))
         return name, sort
     def __str__(self):
-        return self.name
+        if not isinstance(self.sort, FunctionSort): 
+            return '%s_%s' % (str(self.sort), self.name)
+        else:
+            return self.name
+        if self.name == '0':
+            return '%s_0' % (str(self.sort))
+        elif self.name == '__0':
+            return '__%s_0' % (str(self.sort))
+        else:
+            return self.name
 #    def __vmt__(self):
 #        if isinstance(self.sort, FunctionSort):
 #            return '{}_{}_{}'.format(str(self.sort.rng), self.name, '_'.join([str(s) for s in self.sort.domain]))
@@ -147,9 +162,9 @@ class Const(recstruct('Const', ['name', 'sort'], [])):
         if self.name in replace:
             assert False, "replace constant?"
         if isinstance(self.sort, BooleanSort):
-            return "(= %s bv_true)" % (self.name)
+            return "(= %s bv_true)" % (str(self))
         else:
-            return self.name
+            return str(self)
 
 
 def report_bad_sort(op,position,expected,got):
@@ -217,10 +232,8 @@ class Apply(recstruct('Apply', [], ['func', '*terms'])):
             terms = (terms[1], terms[0])
         elif self.func.name == '>=':
             name = '<'
-            st = "(not %s)" % (st)
         elif self.func.name == '<=':
             name = '<'
-            st = "(not %s)" % (st)
             terms = (terms[1], terms[0])
 
         args = [[]]
@@ -249,8 +262,12 @@ class Apply(recstruct('Apply', [], ['func', '*terms'])):
             else:
                 ret = st
         if isinstance(self.func.sort.range, BooleanSort):
-            return "(= %s bv_true)" % ret
+            ret = "(= %s bv_true)" % ret
         else: 
+            ret = ret
+        if self.func.name == '>=' or self.func.name == '<=':
+            return '(not %s)' % ret
+        else:
             return ret
 
     sort = property(lambda self: TopS if self.func.sort == TopS else

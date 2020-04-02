@@ -30,6 +30,8 @@ for cls in [lg.Eq, lg.Not, lg.And, lg.Or, lg.Implies, lg.Iff, lg.Ite, lg.ForAll,
     if hasattr(cls,'__vmt__'):
         cls.__str__ = cls.__vmt__
 
+minimalactions = ['ext:shim.transfer_handler.handle', 'ext:system.server.timer.timeout']
+
 class print_module_vmt():
     def __init__(self, mod, inst):
         self.instance = {}
@@ -49,7 +51,9 @@ class print_module_vmt():
         self.helpers = {}
         self.definitions = set()
         self.defn_labels = []
-        self.str = {}
+        self.prestr = {}
+        self.nexstr = {}
+        self.prenexstr = {}
         self.vmt = {}
         self.axioms = []
         self.prefix = "__"
@@ -90,12 +94,19 @@ class print_module_vmt():
             self.mod.definitions = []
 
         with self.mod.theory_context():
+            print >>sys.stderr, 'sig'
             self.process_sig()
+            print >>sys.stderr, 'defs'
             self.process_defs()
+            print >>sys.stderr, 'conj'
             self.process_conj()
+            print >>sys.stderr, 'axiom'
             self.process_axiom()
+            print >>sys.stderr, 'init'
             self.process_init()
+            print >>sys.stderr, 'actions'
             self.process_actions()
+            print >>sys.stderr, 'done'
 #            self.process_guarantee()
     
             self.print_vmt()
@@ -120,15 +131,15 @@ class print_module_vmt():
             fprint('(define-fun is_%s ((%s %s_type)) Bool (or %s))'%(s, s, s, ' '.join(["(= %s %s%d)" % (s, s, i) for i in range(self.instance[s])])))
         fprint("\n; Declare transition system states")
         for pre in self.pre:
-            fprint(self.str[str(pre)])
+            fprint(self.prestr[str(pre)])
         fprint("\n; Declare next states")
         for pre in self.pre:
             nex = self.pre2nex[pre]
-            fprint(self.str[str(nex)])
+            fprint(self.nexstr[str(nex)])
         fprint("")
         for pre in self.pre:
             nex = self.pre2nex[pre]
-            fprint(self.str[str(pre) + str(nex)])
+            fprint(self.prenexstr[str(pre) + str(nex)])
 # no global
 #        if len(self.glo) != 0:
 #            fprint("")
@@ -141,7 +152,7 @@ class print_module_vmt():
         if len(self.vars) != 0:
             fprint("\n; Declare local variables")
             for v in self.vars:
-                fprint(self.str[str(v)])
+                fprint(self.nexstr[str(v)])
 #        for h in self.defn_labels:
 #            fprint("")
 #            fprint(self.get_vmt_string_def(h))
@@ -174,10 +185,14 @@ class print_module_vmt():
         print >>fo, len(self.pre)
         for pre in self.pre:
             var = self.pre2nex[pre]
-            if var.sort.dom:
-                st = "%d %s %s %s" % (len(var.sort.dom), str(var.sort.rng).upper(), var.name, ' '.join([str(s).upper() for s in var.sort.dom]))
+            if isinstance(var.sort, UnionSort):
+                sort = var.sort.sorts[0]
             else:
-                st = "0 %s %s" % (str(var.sort.name).upper(), var.name)
+                sort = var.sort
+            if sort.dom:
+                st = "%d %s %s %s" % (len(sort.dom), str(sort.rng).upper(), var.name, ' '.join([str(s).upper() for s in sort.dom]))
+            else:
+                st = "0 %s %s" % (str(sort.name).upper(), var.name)
             print >>fo, st
 
         print >>fo
@@ -196,24 +211,26 @@ class print_module_vmt():
             if isinstance(sort, lg.EnumeratedSort):
                 print >> sys.stderr, 'enumerated sort', str(sort), type(sort)
                 n = len(sort.extension)
-                print >> sys.stderr, type(sort.extension[0])
-                for i in range(1, n):
+                self.instance[name] = n
+                for i in range(n):
                     for j in range(i):
-                        print >> sys.stderr, str(sort.extension[i]), type(sort.extension[j])
                         self.axioms.append('(not (= %s_%s %s_%s))'% (sort.name, sort.extension[i], sort.name, sort.extension[j]))
             elif not isinstance(sort,UninterpretedSort):
                 print >> sys.stderr, 'not uninterpreted sort', str(sort), type(sort), isinstance(sort, lg.EnumeratedSort)
-                assert("todo")
+                assert False, "todo"
             for i in range(2, 32):
                 if 2**i >= self.instance[name] and i not in self.used:
                     break
             self.used.add(i)
             self.sorts[name] = i
+
+#        print >>sys.stderr, ivy_logic.sig.symbols
         for name,sym in ivy_logic.sig.symbols.iteritems():
             if isinstance(sym.sort,UnionSort):
-                print >> sys.stderr, 'Union sort!', name, sym.sort
-                continue
-                assert("todo")
+                assert len(sym.sort.sorts) <= 1, 'Unkonwn Union Sort: %s %s' % (name, sym.sort)
+                if len(sym.sort.sorts) == 0:
+                    continue
+                sym = lg.Const(sym.name, sym.sort.sorts[0])
             psym = sym.prefix('__')
             nsym = sym
             self.pre.add(psym)
@@ -243,30 +260,12 @@ class print_module_vmt():
             
     def process_defs(self):
         for lf in self.definitions:
-#             print(type(lf.formula))
-#             print(lf.formula)
             sym = lf.formula.defines()
             print >> sys.stderr, "def!", sym
             label = "def_" + str(sym)
             lhs = lf.formula.lhs()
             rhs = lf.formula.rhs()
             self.add_new_constants(rhs)
-#             args = []
-#             if isinstance(lhs, lg.Apply):
-#                 for arg in lhs.terms:
-#                     args.append(arg)
-#             self.add_definition(label, sym, args, rhs)
-#             sym = lgu.substitute(sym, self.nex2pre)
-#             label = "def_" + str(sym)
-#             lhs = lgu.substitute(lf.formula.lhs(), self.nex2pre)
-#             rhs = lgu.substitute(lf.formula.rhs(), self.nex2pre)
-#             self.add_new_constants(rhs)
-#             args = []
-#             if isinstance(lhs, lg.Apply):
-#                 for arg in lhs.terms:
-#                     args.append(arg)
-#             self.add_definition(label, sym, args, rhs)
-#             self.pre.remove(sym)
 
             args = {}
             vargs = []
@@ -324,7 +323,7 @@ class print_module_vmt():
         fmlas = [lf.formula for lf in self.mod.labeled_axioms]
         cl = lut.Clauses(fmlas)
         f = self.get_formula(cl)
-        self.add_new_constants(f)
+        self.add_new_constants(f, True)
         res = (f, "axiom", "axiom", "true")
         self.vmt["$axiom"] = res
 
@@ -345,7 +344,8 @@ class print_module_vmt():
         
     def process_actions(self):
 #        print self.mod.public_actions
-        for name in self.mod.public_actions:
+        for name in minimalactions:
+            assert name in self.mod.public_actions, '%s not in public actions!' % name
             action = ia.env_action(name)
 #            print (type(action))
 #            print ("action2: ", ia.action_def_to_str(name, action))
@@ -443,7 +443,6 @@ class print_module_vmt():
             if c not in self.allvars and c.name != '>' and c.name != '>=' and c.name != '<=':
                 print >> sys.stderr, "local variable %s" % (c.name)
                 if addPre:
-                    assert False, "new variable %s in init" % (c.name)
                     psym = c
                     nsym = c.prefix("new_")
                     self.pre.add(psym)
@@ -452,6 +451,7 @@ class print_module_vmt():
                     self.nex2pre[nsym] = psym
                     self.allvars.add(psym)
                     self.allvars.add(nsym)
+                    print >> sys.stderr, '???', c, c.sort
                 else:
                     self.vars.add(c)
                     self.allvars.add(c)
@@ -460,7 +460,10 @@ class print_module_vmt():
                 self.add_constant(nsym, addPre)
                 
     def add_constant(self, sym, addPre):   
-        sort = sym.sort
+        if isinstance(sym.sort, UnionSort):
+            sort = sym.sort.sorts[0]
+        else:
+            sort = sym.sort
         name = str(sym)
         names = [name.replace(":", "_")]
         if sort.dom:
@@ -477,7 +480,7 @@ class print_module_vmt():
         else:
             st += ' bool_type)'
 
-        self.str[name] = '\n'.join([st%(n) for n in names])
+        self.nexstr[name] = '\n'.join([st%(n) for n in names])
 #        print name
 #        print self.str[name]
         
@@ -491,7 +494,7 @@ class print_module_vmt():
                     for i in range(self.instance[str(s)]):
                         tmp += ['%s%d_%s'%(s, i, n) for n in prenames]
                     prenames = tmp
-            self.str[prename] = '\n'.join([st%(n) for n in prenames])
+            self.prestr[prename] = '\n'.join([st%(n) for n in prenames])
             
             prenex = '(define-fun .%s ()'
             if not sort.is_relational():
@@ -499,7 +502,7 @@ class print_module_vmt():
             else:
                 prenex += ' bool_type'
             prenex += ' (! %s :next %s))'
-            self.str[prename+name] = '\n'.join([prenex%(n1, n1, n2) for n1, n2 in zip(prenames, names)])
+            self.prenexstr[prename+name] = '\n'.join([prenex%(n1, n1, n2) for n1, n2 in zip(prenames, names)])
 #            print prename, self.str[prename]
 #            print prename+name, self.str[prename+name]
 
@@ -508,8 +511,12 @@ class print_module_vmt():
         psym = self.nex2pre[sym]
         names = [str(sym)]
         prenames = [str(psym)]
-        if sym.sort.dom:
-            for s in sym.sort.dom:
+        if isinstance(sym.sort, UnionSort):
+            sort = sym.sort.sorts[0]
+        else:
+            sort = sym.sort
+        if sort.dom:
+            for s in sort.dom:
                 tmp    = []
                 pretmp = []
                 for i in range(self.instance[str(s)]):
