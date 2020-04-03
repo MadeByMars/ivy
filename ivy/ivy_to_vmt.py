@@ -1,5 +1,4 @@
 import sys
-#sys.path.insert(0, "/home/rock/ws/version/github/aman_goel/latest/ivy/ivy")
 
 import ivy_logic
 import ivy_utils as iu
@@ -104,39 +103,38 @@ class print_module_vmt():
         for pre in self.pre:
             nex = self.pre2nex[pre]
             fprint(self.str[str(pre) + str(nex)])
-        fprint("")
+#TODO: fix global
         if len(self.glo) != 0:
+            fprint("")
             for g in self.glo:
                 fprint(self.str[str(g)])
             fprint("")
             for g in self.glo:
                 pre = self.nex2pre[g]
-#TODO: fix global
                 fprint(self.str[str(pre)+str(g)])
-            fprint("")
         if len(self.vars) != 0:
+            fprint("")
             for v in self.vars:
                 fprint(self.str[str(v)])
-            fprint("")
         for h in self.defn_labels:
+            fprint("")
 #            fprint(self.get_vmt_string_def(h))
             fprint(self.get_vmt_string(h))
-            fprint("")
-        fprint(self.get_vmt_string("$prop"))
         fprint("")
+        fprint(self.get_vmt_string("$prop"))
         if len(self.mod.labeled_axioms) != 0:
+            fprint("")
             f, name, suffix, value = self.vmt["$axiom"]
             self.vmt["$axiom"] = ("(and %s %s)"%(f, ' '.join(self.distincts)), name, suffix, value)
             fprint(self.get_vmt_string("$axiom"))
-            fprint("")
-        fprint(self.get_vmt_string("$init"))
         fprint("")
+        fprint(self.get_vmt_string("$init"))
         for actname in self.actions:
+            fprint("")
             fprint(self.get_vmt_string(actname))
-            fprint("")
         for h in sorted(self.helpers.keys()):
-            fprint(self.get_vmt_string(h))
             fprint("")
+            fprint(self.get_vmt_string(h))
         
     def process_sig(self):
         for name,sort in ivy_logic.sig.sorts.iteritems():
@@ -145,7 +143,6 @@ class print_module_vmt():
             if isinstance(sort, lg.EnumeratedSort):
                 print 'enumerated sort', str(sort), type(sort)
                 n = len(sort.extension)
-                print type(sort.extension[0])
                 for i in range(1, n):
                     for j in range(i):
                         print str(sort.extension[i]), type(sort.extension[j])
@@ -159,9 +156,10 @@ class print_module_vmt():
             self.str[str(sort)] = res
         for name,sym in ivy_logic.sig.symbols.iteritems():
             if isinstance(sym.sort,UnionSort):
-                print 'Union sort!', name, sym.sort
-                continue
-                assert("todo")
+                assert len(sym.sort.sorts) <= 1, 'Unkonwn Union Sort: %s %s' % (name, sym.sort)
+                if len(sym.sort.sorts) == 0:
+                    continue
+                sym = lg.Const(sym.name, sym.sort.sorts[0])
             psym = sym.prefix('__')
             nsym = sym
             self.pre.add(psym)
@@ -310,6 +308,7 @@ class print_module_vmt():
             update = action.update(pre.domain,pre.in_scope)
             sf = self.standardize_action(f, update[0], name)
             self.add_new_constants(sf)
+            name = name.replace(":", "_")
             
             actname = "action_" + name
             self.actions.add(actname)
@@ -409,26 +408,26 @@ class print_module_vmt():
 #            print prename, self.str[prename]
 #            print prename+name, self.str[prename+name]
             
-    def add_definition(self, label, sym, args, rhs):   
-        sort = sym.sort
-        name = str(sym)
+#    def add_definition(self, label, sym, args, rhs):
+#        sort = sym.sort
+#        name = str(sym)
 
-        prenex = ''
-        prenex +=  '(define-fun '
-        prenex +=  name
-        prenex += " ("
-        if sort.dom:
-            prenex += ' '.join('({} {})'.format(args[idx], s) for idx,s in enumerate(sort.dom))
-        prenex += ")"
-        if not sort.is_relational():
-            prenex += ' {}'.format(sort.rng)
-        else:
-            prenex += ' Bool'
-        prenex += '\n'
+#        prenex = ''
+#        prenex +=  '(define-fun '
+#        prenex +=  name
+#        prenex += " ("
+#        if sort.dom:
+#            prenex += ' '.join('({} {})'.format(args[idx], s) for idx,s in enumerate(sort.dom))
+#        prenex += ")"
+#        if not sort.is_relational():
+#            prenex += ' {}'.format(sort.rng)
+#        else:
+#            prenex += ' Bool'
+#        prenex += '\n'
         
-        res = (rhs, label, prenex, "")
-        self.vmt[label] = res
-        self.defn_labels.append(label)
+#        res = (rhs, label, prenex, "")
+#        self.vmt[label] = res
+#        self.defn_labels.append(label)
             
     def set_global(self, sym, k):
         sort = sym.sort

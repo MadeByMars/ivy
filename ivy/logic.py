@@ -134,7 +134,7 @@ class Const(recstruct('Const', ['name', 'sort'], [])):
         if isinstance(self.sort, FunctionSort):
             return '{}_{}_{}'.format(str(self.sort.rng), self.name, '_'.join([str(s) for s in self.sort.domain]))
         else:
-            return '{}_{}'.format(str(self.sort.rng), self.name)
+            return '{}_{}'.format(str(self.sort.rng), self.name.replace(":", "_"))
     def __call__(self, *terms):
         return Apply(self, *terms) if len(terms) > 0 else self
 
