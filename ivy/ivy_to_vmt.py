@@ -3,7 +3,6 @@ import sys
 import ivy_logic
 import ivy_utils as iu
 import ivy_actions as ia
-import logic as lg
 import ivy_printer as ip
 
 from ivy_logic import UninterpretedSort, UnionSort
@@ -25,12 +24,10 @@ def fprint(s):
     global outF
     outF.write(s + "\n")
 
-for cls in [lg.Eq, lg.Not, lg.And, lg.Or, lg.Implies, lg.Iff, lg.Ite, lg.ForAll, lg.Exists,
-            lg.Apply, lg.Var, lg.Const, lg.Lambda, lg.NamedBinder, lg.EnumeratedSort, lg.Const]:
-    if hasattr(cls,'__vmt__'):
-        cls.__str__ = cls.__vmt__
-
-minimalactions = ['ext:shim.transfer_handler.handle', 'ext:system.server.timer.timeout']
+#for cls in [lg.Eq, lg.Not, lg.And, lg.Or, lg.Implies, lg.Iff, lg.Ite, lg.ForAll, lg.Exists,
+#            lg.Apply, lg.Var, lg.Const, lg.Lambda, lg.NamedBinder, lg.EnumeratedSort, lg.Const]:
+#    if hasattr(cls,'__vmt__'):
+#        cls.__str__ = cls.__vmt__
 
 class print_module_vmt():
     def __init__(self, mod, inst):
@@ -65,13 +62,16 @@ class print_module_vmt():
         for i in range(n):
             st = fi.readline().split('=')
             self.instance[st[0]] = eval(st[1])
-        fi.readline()
+        assert fi.readline() == '\n'
         n = eval(fi.readline())
         for i in range(n):
             st = fi.readline()[:-1]
             self.concretizations.append(st)
             s = st.split('=')
-            self.axioms.append('(= %s %s)' % (s[0], s[1]))
+            if len(s) == 2:
+                self.axioms.append('(= %s %s)' % (s[0], s[1]))
+            else:
+                self.axioms.append("(= %s bv_true)" % (s[0]))
 
     def execute(self):
         if len(self.mod.labeled_props) != 0:
@@ -131,15 +131,15 @@ class print_module_vmt():
             fprint('(define-fun is_%s ((%s %s_type)) Bool (or %s))'%(s, s, s, ' '.join(["(= %s %s%d)" % (s, s, i) for i in range(self.instance[s])])))
         fprint("\n; Declare transition system states")
         for pre in self.pre:
-            fprint(self.prestr[str(pre)])
+            fprint(self.prestr[pre.get_vmt()])
         fprint("\n; Declare next states")
         for pre in self.pre:
             nex = self.pre2nex[pre]
-            fprint(self.nexstr[str(nex)])
+            fprint(self.nexstr[nex.get_vmt()])
         fprint("")
         for pre in self.pre:
             nex = self.pre2nex[pre]
-            fprint(self.prenexstr[str(pre) + str(nex)])
+            fprint(self.prenexstr[pre.get_vmt() + nex.get_vmt()])
 # no global
 #        if len(self.glo) != 0:
 #            fprint("")
@@ -152,7 +152,7 @@ class print_module_vmt():
         if len(self.vars) != 0:
             fprint("\n; Declare local variables")
             for v in self.vars:
-                fprint(self.nexstr[str(v)])
+                fprint(self.nexstr[v.get_vmt()])
 #        for h in self.defn_labels:
 #            fprint("")
 #            fprint(self.get_vmt_string_def(h))
@@ -182,6 +182,14 @@ class print_module_vmt():
         
     def print_config(self):
         fo = open('config.txt', 'w')
+        if ivy_compiler.isolate.get():
+            st = sys.argv[1].split("_")
+            print>>fo, '_'.join(st[:-1])
+            print>>fo, 'isolate=%s' % ivy_compiler.isolate.get()
+        else:
+            print>>fo, sys.argv[1]
+        print>>fo
+        
         print >>fo, len(self.pre)
         for pre in self.pre:
             var = self.pre2nex[pre]
@@ -190,9 +198,9 @@ class print_module_vmt():
             else:
                 sort = var.sort
             if sort.dom:
-                st = "%d %s %s %s" % (len(sort.dom), str(sort.rng).upper(), var.name, ' '.join([str(s).upper() for s in sort.dom]))
+                st = "%d %s %s %s" % (len(sort.dom), sort.rng.get_vmt().upper(), var.name, ' '.join([s.get_vmt().upper() for s in sort.dom]))
             else:
-                st = "0 %s %s" % (str(sort.name).upper(), var.name)
+                st = "0 %s %s" % (sort.name.upper(), var.name)
             print >>fo, st
 
         print >>fo
@@ -209,14 +217,14 @@ class print_module_vmt():
             if name == 'bool':
                 continue
             if isinstance(sort, lg.EnumeratedSort):
-                print >> sys.stderr, 'enumerated sort', str(sort), type(sort)
+                print >> sys.stderr, 'enumerated sort', sort.get_vmt(), type(sort)
                 n = len(sort.extension)
                 self.instance[name] = n
                 for i in range(n):
                     for j in range(i):
                         self.axioms.append('(not (= %s_%s %s_%s))'% (sort.name, sort.extension[i], sort.name, sort.extension[j]))
             elif not isinstance(sort,UninterpretedSort):
-                print >> sys.stderr, 'not uninterpreted sort', str(sort), type(sort), isinstance(sort, lg.EnumeratedSort)
+                print >> sys.stderr, 'not uninterpreted sort', sort.get_vmt(), type(sort), isinstance(sort, lg.EnumeratedSort)
                 assert False, "todo"
             for i in range(2, 32):
                 if 2**i >= self.instance[name] and i not in self.used:
@@ -242,24 +250,9 @@ class print_module_vmt():
             
             self.add_constant(sym, True)
     
-    def process_defs_v0(self):
-        for lf in self.definitions:
-            f = lf.formula.to_constraint()
-            self.add_new_constants(f)
-            label = str(lf.label)
-            res = (f, label, "axiom", "true")
-            self.vmt[label] = res
-            self.defn_labels.append(label)
-            
-            pref = lgu.substitute(f, self.nex2pre)
-            self.add_new_constants(pref)
-            label = "__" + str(lf.label)
-            res = (pref, label, "axiom", "true")
-            self.vmt[label] = res
-            self.defn_labels.append(label)
-            
     def process_defs(self):
         for lf in self.definitions:
+            assert False, "TODO"
             sym = lf.formula.defines()
             print >> sys.stderr, "def!", sym
             label = "def_" + str(sym)
@@ -292,32 +285,13 @@ class print_module_vmt():
             self.defn_labels.append(label)
             
     def process_conj(self):
-        fmlas = []
-        helpers = []
-        for lf in self.mod.labeled_conjs:
-            label = str(lf.label)
-            if label.startswith("help_"):
-                print >>sys.stderr, "help", lf
-                assert False
-                helpers.append(lf)
-            else:
-                fmlas.append(lf.formula)
+        fmlas = [lf.formula for lf in self.mod.labeled_conjs]
         cl = lut.Clauses(fmlas)
         f = self.get_formula(cl)
         pref = lgu.substitute(f, self.nex2pre)
-        self.add_new_constants(pref)
+        self.add_new_constants(pref, True)
         res = (pref, "prop", "invar-property", "0")
         self.vmt["$prop"] = res
-        
-        for lf in helpers:
-            label = str(lf.label)
-            self.helpers[label] = lf.formula
-            cl = lut.Clauses([lf.formula])
-            f = self.get_formula(cl)
-            pref = lgu.substitute(f, self.nex2pre)
-            self.add_new_constants(pref)
-            res = (pref, label, "help", label)
-            self.vmt[label] = res
         
     def process_axiom(self):
         fmlas = [lf.formula for lf in self.mod.labeled_axioms]
@@ -335,6 +309,9 @@ class print_module_vmt():
             history = ag.get_history(ag.states[0])
             post = lut.and_clauses(history.post)
             init_cl.append(post)
+        while len(init_cl) > 1:
+            if init_cl[0] == init_cl[1]:
+                init_cl = init_cl[1:]
         clauses = lut.and_clauses(*init_cl)
         f = self.get_formula(clauses)
         pref = lgu.substitute(f, self.nex2pre)
@@ -344,19 +321,21 @@ class print_module_vmt():
         
     def process_actions(self):
 #        print self.mod.public_actions
-        for name in minimalactions:
-            assert name in self.mod.public_actions, '%s not in public actions!' % name
+        st = [ivy_compiler.isolate.get(), 'timeout', 'handle']
+        for name in self.mod.public_actions:
+          if any(s in name for s in st):
             action = ia.env_action(name)
-#            print (type(action))
-#            print ("action2: ", ia.action_def_to_str(name, action))
+#            print "action2: ", ia.action_def_to_str(name, action)
             ag = ivy_art.AnalysisGraph()
             pre = itp.State()
             pre.clauses = lut.true_clauses()
-#            print(pre.to_formula())
-            post = ag.execute(action, pre)
+#            print pre.to_formula()
+            with itp.EvalContext(check=False):
+                post = ag.execute(action, pre)
             history = ag.get_history(post)
             clauses = lut.and_clauses(history.post)
             f = self.get_formula(clauses)
+#            print >>sys.stderr, name, f
             conjuncts = clauses.fmlas
             defn = lut.close_epr(lg.And(*conjuncts))
 #             print(defn)
@@ -364,6 +343,7 @@ class print_module_vmt():
             
             update = action.update(pre.domain,pre.in_scope)
             sf = self.standardize_action(f, update[0], name)
+#            print >> sys.stderr, sf
 
             copies = []
             for var in self.nex:
@@ -399,24 +379,6 @@ class print_module_vmt():
                             print fail
         exit(0)
 
-    def process_global(self):
-        for n in self.nex:
-            if n not in self.updated:
-                self.glo.add(n)
-        subs = {}
-        for n in self.glo:
-            p = self.nex2pre[n]
-            subs[p] = n
-            self.pre.remove(p)
-            self.str.pop(str(p))
-            self.set_global(n, str(p)+str(n))
-#             print("\treplacing %s -> %s globally" % (p, n))
-        if len(subs) != 0:
-            for k, v in self.vmt.iteritems():
-                f, name, suffix, value = v
-                newF = lgu.substitute(f, subs)
-                self.vmt[k] = (newF, name, suffix, value)
-        
     def standardize_action(self, f, nexvars, name):
         nexSet = set()
         for n in nexvars:
@@ -429,7 +391,7 @@ class print_module_vmt():
             if c in self.nex:
                 if c not in nexSet:
                     subs[c] = self.nex2pre[c]
-        
+#        print >>sys.stderr, subs
         if len(subs) == 0:
             return f
         else:
@@ -464,19 +426,19 @@ class print_module_vmt():
             sort = sym.sort.sorts[0]
         else:
             sort = sym.sort
-        name = str(sym)
+        name = sym.get_vmt()
         names = [name.replace(":", "_")]
         if sort.dom:
             for s in sort.dom:
                 tmp = []
-                for i in range(self.instance[str(s)]):
+                for i in range(self.instance[s.get_vmt()]):
                     tmp += ['%s%d_%s'%(s, i, n) for n in names]
                 names = tmp
 
         st = '(declare-fun %s ()'
         if not sort.is_relational():
-            st += ' {}_type)'.format(sort.rng)
-            self.axioms += ["(is_%s %s)" % (sort.rng, n) for n in names]
+            st += ' {}_type)'.format(sort.rng.get_vmt())
+            self.axioms += ["(is_%s %s)" % (sort.rng.get_vmt(), n) for n in names]
         else:
             st += ' bool_type)'
 
@@ -486,19 +448,19 @@ class print_module_vmt():
         
         if addPre:
             psym = self.nex2pre[sym]
-            prename = str(psym)
-            prenames = [prename]
+            prename = psym.get_vmt()
+            prenames = [prename.replace(":", '_')]
             if sort.dom:
                 for s in sort.dom:
                     tmp = []
-                    for i in range(self.instance[str(s)]):
+                    for i in range(self.instance[s.get_vmt()]):
                         tmp += ['%s%d_%s'%(s, i, n) for n in prenames]
                     prenames = tmp
             self.prestr[prename] = '\n'.join([st%(n) for n in prenames])
             
             prenex = '(define-fun .%s ()'
             if not sort.is_relational():
-                prenex += ' {}_type'.format(sort.rng)
+                prenex += ' {}_type'.format(sort.rng.get_vmt())
             else:
                 prenex += ' bool_type'
             prenex += ' (! %s :next %s))'
@@ -509,8 +471,8 @@ class print_module_vmt():
     def copy_constant(self, sym):
         ret = []
         psym = self.nex2pre[sym]
-        names = [str(sym)]
-        prenames = [str(psym)]
+        names = [sym.get_vmt().replace(":", "_")]
+        prenames = [psym.get_vmt().replace(":", "_")]
         if isinstance(sym.sort, UnionSort):
             sort = sym.sort.sorts[0]
         else:
@@ -519,80 +481,55 @@ class print_module_vmt():
             for s in sort.dom:
                 tmp    = []
                 pretmp = []
-                for i in range(self.instance[str(s)]):
+                for i in range(self.instance[s.get_vmt()]):
                     tmp    += ['%s%d_%s'%(s, i, n) for n in names]
                     pretmp += ['%s%d_%s'%(s, i, n) for n in prenames]
                 names = tmp
                 prenames = pretmp
         return ["(= %s %s)" % (name, prename) for name, prename in zip(names, prenames)]
             
-    def add_definition(self, label, sym, args, rhs):   
-        sort = sym.sort
-        name = str(sym)
-
-        prenex = ''
-        prenex +=  '(define-fun '
-        prenex +=  name
-        prenex += " ("
-        if sort.dom:
-            prenex += ' '.join('({} {})'.format(args[idx], s) for idx,s in enumerate(sort.dom))
-        prenex += ")"
-        if not sort.is_relational():
-            prenex += ' {}'.format(sort.rng)
-        else:
-            prenex += ' Bool'
-        prenex += '\n'
-        
-        res = (rhs, label, prenex, "")
-        self.vmt[label] = res
-        self.defn_labels.append(label)
-            
-    def set_global(self, sym, k):
-        sort = sym.sort
-        name = str(sym)
-        
-        prenex = ''
-        prenex +=  '(define-fun '
-        prenex +=  '.' + name
-        prenex += " ("
-        if sort.dom:
-            prenex += ' '.join('(V{} {})'.format(idx, s) for idx,s in enumerate(sort.dom))
-        prenex += ")"
-        if not sort.is_relational():
-            prenex += ' {}'.format(sort.rng)
-        else:
-            prenex += ' Bool'
-        prenex += ' (! '
-        if sort.dom:
-            prenex += '(' + name + ' '
-            prenex += ' '.join('V{}'.format(idx) for idx,s in enumerate(sort.dom))
-            prenex += ')'
-        else:
-            prenex += name
-        prenex += ' :global true))'
-        self.str[k] = prenex
-                    
     def get_formula(self, clauses):
         cl = lut.and_clauses(clauses)
         f = cl.to_formula()
+        rep = {}
+        for c in f:
+            if isinstance(c, lg.Eq) or isinstance(c, lg.Iff):
+#                print >>sys.stderr, 'here!!', type(c.t1), type(c.t2)
+#                print >>sys.stderr, c
+                for st in ['fml:', 'loc:', 'ts0_']:
+                    if isinstance(c.t1, lg.Const) and st in c.t1.name and (c.t1 not in rep or rep[c.t1] == c.t1):
+                        if c.t2 in rep:
+                            rep[c.t1] = rep[c.t2]
+                            break
+                        else:
+                            rep[c.t1] = c.t2
+                            break
+                    elif isinstance(c.t2, lg.Const) and st in c.t2.name and (c.t2 not in rep or rep[c.t2] == c.t2):
+                        if c.t1 in rep:
+                            rep[c.t2] = rep[c.t1]
+                            break
+                        else:
+                            rep[c.t2] = c.t1
+                            break
+        print >>sys.stderr, rep
+        print >>sys.stderr, f
+        return lgu.substitute(f, rep)
         return f
     
     def get_vmt_string(self, k):
         f, name, suffix, value = self.vmt[k]
         res = '(define-fun .' + name + ' () Bool (! \n'
-        res += ' (let (($v '
         res += f.instantiation(self.instance, {}).replace(":", "_")
-        res += '\n ))\n (and $v))'
         res += '\n :' + suffix + ' ' + value + '))'
         return res
     
-    def get_vmt_string_def(self, k):
-        f, name, prenex, value = self.vmt[k]
-        
-        res = prenex
-        res += ' ' + str(f)
-        res += '\n)'
-        return res
+#    def get_vmt_string_def(self, k):
+#        f, name, prenex, value = self.vmt[k]
+#        
+#        res = prenex
+#        res += ' ' + str(f)
+#        res += '\n)'
+#        return res
     
     def print_sort_size(self, name, sz):
         res = ''
@@ -613,10 +550,6 @@ def print_isolate(inst):
         mod.update_conjs()
 #     ifc.check_fragment()
     print_module_vmt(mod, inst)
-    with im.module.theory_context():
-#         ip.print_module(mod)
-        pass
-        return
 
 def print_module(inst):
     isolate = ivy_compiler.isolate.get()
