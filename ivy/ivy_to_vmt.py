@@ -323,7 +323,7 @@ class print_module_vmt():
 #        print self.mod.public_actions
         st = [ivy_compiler.isolate.get(), 'timeout', 'handle']
         for name in self.mod.public_actions:
-          if any(s in name for s in st):
+          if ivy_compiler.isolate.get() == None or any(s in name for s in st):
             action = ia.env_action(name)
 #            print "action2: ", ia.action_def_to_str(name, action)
             ag = ivy_art.AnalysisGraph()
@@ -511,8 +511,8 @@ class print_module_vmt():
                         else:
                             rep[c.t2] = c.t1
                             break
-        print >>sys.stderr, rep
-        print >>sys.stderr, f
+#        print >>sys.stderr, rep
+#        print >>sys.stderr, f
         return lgu.substitute(f, rep)
         return f
     
