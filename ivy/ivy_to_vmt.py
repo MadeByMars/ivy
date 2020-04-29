@@ -187,7 +187,8 @@ class print_module_vmt():
             print>>fo, '_'.join(st[:-1])
             print>>fo, 'isolate=%s' % ivy_compiler.isolate.get()
         else:
-            print>>fo, sys.argv[1]
+            st = sys.argv[1].replace(".ivy", '')
+            print>>fo, st
         print>>fo
         
         print >>fo, len(self.pre)
