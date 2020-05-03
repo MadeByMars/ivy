@@ -232,7 +232,7 @@ class Apply(recstruct('Apply', [], ['func', '*terms'])):
 
         args = [[]]
         for term in terms:
-            if not isinstance(term, Apply) and term.name in replace:
+            if isinstance(term, Var) and term.name in replace:
                 args = map(lambda a: a + [(None, replace[term.name])], args)
             else:
                 newargs = []
