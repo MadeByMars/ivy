@@ -231,14 +231,18 @@ def normalize_named_binders(ast,names=None):
         subs = dict((v.name,nv) for v,nv in zip(vs,nvs))
         b = normalize_named_binders(ast.body, names)
         b = substitute_ast(b, subs)
-        return type(ast)(ast.name, nvs, b)
+        return type(ast)(ast.name, nvs, ast.environ, b)
     args = [normalize_named_binders(x, names) for x in ast.args]
     if is_app(ast):
         return normalize_named_binders(ast.rep,names)(*args)
     else:
         return ast.clone(args)
 
-def replace_temporals_by_named_binder_g_ast(ast, g=lambda vs, t: lg.NamedBinder('g', vs, t)):
+def default_globally_binder(vs, t, env):
+    name = 'g['+str(env)+']' if env is not None else 'g'
+    return lg.NamedBinder(name, vs, t)
+
+def replace_temporals_by_named_binder_g_ast(ast, g=default_globally_binder):
     """
     Replace temporal operators globally and eventually by a named
     binder g. Note that temporal operators inside formulas bound by
@@ -247,10 +251,10 @@ def replace_temporals_by_named_binder_g_ast(ast, g=lambda vs, t: lg.NamedBinder(
     if type(ast) == lg.Globally:
         body = replace_temporals_by_named_binder_g_ast(ast.body, g)
         vs, nvs, body = normalize_free_variables(body)
-        return g(nvs,body)(*vs)
+        return g(nvs,body,ast.environ)(*vs)
     elif type(ast) == lg.Eventually:
         notbody = lg.Not(ast.body) #if type(ast.body) != lg.Not else ast.body.body
-        return replace_temporals_by_named_binder_g_ast(lg.Not(lg.Globally(notbody)), g)
+        return replace_temporals_by_named_binder_g_ast(lg.Not(lg.Globally(ast.environ,notbody)), g)
     else:
         args = [replace_temporals_by_named_binder_g_ast(x, g) for x in ast.args]
         if type(ast) == lg.Apply:
@@ -1146,21 +1150,30 @@ def or_clauses(*args):
     else:
         used = set(chain(*[arg.symbols() for arg in args]))
         rn = UniqueRenamer('__ts0',used)
-        res,vs = or_clauses_int(rn,args)
+        res,vs,args = or_clauses_int(rn,args)
     fixed_vs = []
+    fixed_args = []
     idx = 0
     for a in orig_args:
         if a.is_false():
             fixed_vs.append(Or())
+            fixed_args.append(a)
         else:
             fixed_vs.append(vs[idx])
+            fixed_args.append(args[idx])
             idx += 1
-    return fix_or_annot(res,fixed_vs,orig_args)
+    return fix_or_annot(res,fixed_vs,fixed_args)
 
 
 def ite_clauses(cond,args):
     assert len(args) == 2
     args = coerce_args_to_clauses(args)
+    if args[0].is_false() and args[1].is_false():
+        return args[0]
+    if args[0].is_false():
+        args[0] = Clauses(args[0].fmlas,args[1].defs,args[0].annot) 
+    elif args[1].is_false():
+        args[1] = Clauses(args[1].fmlas,args[0].defs,args[1].annot) 
     used = set(chain(*[arg.symbols() for arg in args]))
     used.update(symbols_ast(cond))
     rn = UniqueRenamer('__ts0',used)
@@ -1213,7 +1226,7 @@ def or_clauses_int(rn,args):
     defs = [d for n,d in defidx.iteritems()] # TODO: hash traversal dependency
     res = Clauses(fmlas,defs)
     #    print "or_clauses_int res = {}".format(res)
-    return res,vs
+    return res,vs,args
 
 def debug_clauses_list(cl):
     for clauses in cl:
@@ -1262,7 +1275,7 @@ def tagged_or_clauses(prefix,*args):
     predicate symbols begin with "prefix". See find_true_disjunct.
     """
     args = coerce_args_to_clauses(args)
-    res,vs = or_clauses_int(UniqueRenamer('__to0',dict()),args)
+    res,vs,args = or_clauses_int(UniqueRenamer('__to0',dict()),args)
     return fix_or_annot(res,vs,args)
 
 def find_true_disjunct(clauses,eval_fun):

@@ -20,11 +20,14 @@ import itertools
 import ivy_cpp
 import ivy_cpp_types
 import ivy_fragment as ifc
+import sys
+import os
 
 
 from collections import defaultdict
 from operator import mul
 import re
+
 
 def all_state_symbols():
     syms = il.all_symbols()
@@ -119,7 +122,11 @@ def varname(name):
     return name.replace(':','__COLON__')
 #    return name.split(':')[-1]
 
-other_varname = varname
+def other_varname(name):
+    if global_classname is not None:
+        return global_classname + '::' + varname(name)
+    return varname(name)
+    
 
 def funname(name):
     if not isinstance(name,str):
@@ -202,7 +209,7 @@ def declare_ctuple(header,dom):
     header.append(t+'('+','.join('const '+ctypefull(d)+' &arg'+str(idx) for idx,d in enumerate(dom))
                   + ') : '+','.join('arg'+str(idx)+'(arg'+str(idx)+')' for idx,d in enumerate(dom))
                   + '{}\n')
-    header.append("        size_t __hash() const { return "+struct_hash_fun(['arg{}'.format(n) for n in range(len(dom))],dom) + ";}\n")
+    header.append("        size_t __hash() const { "+struct_hash_fun(['arg{}'.format(n) for n in range(len(dom))],dom) + "}\n")
     header.append('};\n')
 
 def ctuple_hash(dom):
@@ -301,8 +308,15 @@ def hashtype(sort,classname=None):
 def has_string_interp(sort):
     return il.sort_interp(sort) == 'strlit'    
 
+def is_numeric_range(sort):
+    s = sort.extension[0]
+    return s[0].isdigit() or (s[0] == '-' and len(s) > 1 and s[1].isdigit)
+
+
 def ctype_remaining_cases(sort,classname):
     if isinstance(sort,il.EnumeratedSort):
+        if is_numeric_range(sort):
+            return 'int'
         return ((classname+'::') if classname != None else '') + varname(sort.name)
     if sort.is_relational():
         return 'bool'
@@ -373,6 +387,12 @@ def native_type_full(self):
     return self.args[0].inst(native_reference,self.args[1:])    
 
 large_thresh = 1024
+
+def is_large_destr(sort):
+    if hasattr(sort,'dom') and any(not is_any_integer_type(s) for s in sort.dom[1:]):
+        return True
+    cards = map(sort_card,sort.dom[1:] if hasattr(sort,'dom') else [])
+    return not(all(cards) and reduce(mul,cards,1) <= large_thresh)
 
 def is_large_type(sort):
     if hasattr(sort,'dom') and any(not is_any_integer_type(s) for s in sort.dom):
@@ -478,17 +498,31 @@ def make_thunk(impl,vs,expr):
     close_scope(impl,semi=True)
     return 'hash_thunk<{},{}>(new {}({}))'.format(D,R,name,','.join(envnames))
 
+# def struct_hash_fun(field_names,field_sorts):
+#     if len(field_names) == 0:
+#         return '0'
+#     return '+'.join('hash_space::hash<{}>()({})'.format(hashtype(s),varname(f)) for s,f in zip(field_sorts,field_names))
+
 def struct_hash_fun(field_names,field_sorts):
-    if len(field_names) == 0:
-        return '0'
-    return '+'.join('hash_space::hash<{}>()({})'.format(hashtype(s),varname(f)) for s,f in zip(field_sorts,field_names))
+    code = []
+    code_line(code,'size_t hv = 0')
+    for sort,f in zip(field_sorts,field_names):
+        domain = sort_domain(sort)[1:]
+        if not is_large_destr(sort):
+            vs = variables(domain)
+            open_loop(code,vs)
+            code_line(code,'hv += ' + 'hash_space::hash<{}>()({})'.format(hashtype(sort.rng),varname(f) + ''.join('['+varname(a)+']' for a in vs)))
+            close_loop(code,vs)
+    code_line(code,'return hv')
+    return ''.join(code)
+    
 
 def emit_struct_hash(header,the_type,field_names,field_sorts):
     header.append("""
     template<> class hash<the_type> {
         public:
             size_t operator()(const the_type &__s) const {
-                return the_val;
+                the_val
              }
     };
 """.replace('the_type',the_type).replace('the_val',struct_hash_fun(['__s.'+n for n in field_names],field_sorts)))
@@ -508,14 +542,15 @@ def emit_cpp_sorts(header):
             destrs = im.module.sort_destructors[name]
             for destr in destrs:
                 declare_symbol(header,destr,skip_params=1)
-            header.append("        size_t __hash() const { return "+struct_hash_fun(map(memname,destrs),[d.sort.rng for d in destrs]) + ";}\n")
+            header.append("        size_t __hash() const { "+struct_hash_fun(map(memname,destrs),[d.sort for d in destrs]) + "}\n")
             header.append("    };\n");
         elif isinstance(il.sig.sorts[name],il.EnumeratedSort):
             sort = il.sig.sorts[name]
-            header.append('    enum ' + varname(name) + '{' + ','.join(varname(x) for x in sort.extension) + '};\n');
-        elif name in il.sig.interp and isinstance(il.sig.interp[name],il.EnumeratedSort):
-            sort = il.sig.interp[name]
-            header.append('    enum ' + varname(name) + '{' + ','.join(varname(x) for x in sort.extension) + '};\n');
+            if not is_numeric_range(sort):
+                header.append('    enum ' + varname(name) + '{' + ','.join(varname(x) for x in sort.extension) + '};\n');
+            elif name in il.sig.interp and isinstance(il.sig.interp[name],il.EnumeratedSort):
+                sort = il.sig.interp[name]
+                header.append('    enum ' + varname(name) + '{' + ','.join(varname(x) for x in sort.extension) + '};\n');
         elif name in im.module.variants:
             sort = il.sig.sorts[name]
             cpptype = ivy_cpp_types.VariantType(varname(name),sort,[(s,ctypefull(s,classname=the_classname)) for s in im.module.variants[name]])
@@ -661,7 +696,8 @@ def emit_set(header,symbol):
     cname = varname(name)
     sort = symbol.sort
     domain = sort_domain(sort)
-    if sort.rng.name in im.module.sort_destructors and all(is_finite_iterable_sort(s) for s in domain):
+    if sort.rng.name in im.module.sort_destructors and not is_large_type(sort):
+    # all(is_finite_iterable_sort(s) for s in domain):
         destrs = im.module.sort_destructors[sort.rng.name]
         for destr in destrs:
             vs = variables(domain)
@@ -674,7 +710,12 @@ def emit_set(header,symbol):
     if is_large_type(sort):
         vs = variables(sort.dom)
         cvars = ','.join('ctx.constant("{}",sort("{}"))'.format(varname(v),v.sort.name) for v in vs)
-        code_line(header,'slvr.add(forall({},__to_solver(*this,apply("{}",{}),obj.{})))'.format(cvars,sname,cvars,cname))
+        open_scope(header)
+        code_line(header,'std::vector<z3::expr> __quants;');
+        for v in vs:
+            code_line(header,'__quants.push_back(ctx.constant("{}",sort("{}")));'.format(varname(v),v.sort.name));
+        code_line(header,'slvr.add(forall({},__to_solver(*this,apply("{}",{}),obj.{})))'.format("__quants",sname,cvars,cname))
+        close_scope(header)
         return
     for idx,dsort in enumerate(domain):
         dcard = sort_card(dsort)
@@ -1328,6 +1369,9 @@ def may_alias(x,y):
 
 def emit_param_decls(header,name,params,extra=[],classname=None,ptypes=None):
     header.append(funname(name) + '(')
+    for p in params:
+        if il.is_function_sort(p.sort):
+            raise(iu.IvyError(None,'Cannot compile parameter {} with function sort'.format(p)))
     header.append(', '.join(extra + [ctype(p.sort,classname=classname,ptype = ptypes[idx] if ptypes else None) + ' ' + varname(p.name) for idx,p in enumerate(params)]))
     header.append(')')
 
@@ -1402,7 +1446,7 @@ def emit_some_action(header,impl,name,action,classname,inline=False):
         indent(code)
         p = action.formal_returns[0]
         if p not in action.formal_params:
-            code.append(ctype(p.sort) + ' ' + varname(p.name) + ';\n')
+            code.append(ctypefull(p.sort,classname=classname) + ' ' + varname(p.name) + ';\n')
             mk_nondet_sym(code,p,p.name,0)
     with ivy_ast.ASTContext(action):
         action.emit(code)
@@ -1655,6 +1699,7 @@ def find_import_callers():
         name = imp.imported()
         if not imp.scope() and name in im.module.actions:
             import_callers.add('ext:' + name[5:])
+            import_callers.add(name[5:])
             
 def module_to_cpp_class(classname,basename):
     global the_classname
@@ -1749,6 +1794,7 @@ def module_to_cpp_class(classname,basename):
     header.append('class ' + classname + ' {\n  public:\n')
     header.append("    typedef {} ivy_class;\n".format(classname))
     header.append("""
+    std::vector<std::string> __argv;
 #ifdef _WIN32
     void *mutex;  // forward reference to HANDLE
 #else
@@ -2533,6 +2579,7 @@ class z3_thunk : public thunk<D,R> {
         cpptype.emit_templates()
 
     global native_classname
+    global global_classname
     once_memo = set()
     for native in im.module.natives:
         tag = native_type(native)
@@ -2703,6 +2750,7 @@ class z3_thunk : public thunk<D,R> {
         variant_of = set((x.name,y) for y,l in im.module.variants.iteritems() for x in l)
         arcs = [a for a in arcs if a in variant_of]
         inline_sort_order = iu.topological_sort(im.module.sort_order,arcs)
+        global_classname = classname
         for sort_name in inline_sort_order:
             if sort_name in im.module.variants:
                 sort = im.module.sig.sorts[sort_name] 
@@ -2759,6 +2807,7 @@ class z3_thunk : public thunk<D,R> {
                         close_loop(impl,[v])
                 code_line(impl,"res.close_struct()")
                 close_scope(impl)
+        global_classname = None
 
 
         for sort_name in enum_sort_names:
@@ -2783,6 +2832,7 @@ class z3_thunk : public thunk<D,R> {
                 emit_repl_imports(header,impl,classname)
                 emit_repl_boilerplate1(header,impl,classname)
 
+            global_classname = classname
             for sort_name in sorted(im.module.sort_destructors):
                 destrs = im.module.sort_destructors[sort_name]
                 sort = im.module.sig.sorts[sort_name]
@@ -2834,7 +2884,7 @@ class z3_thunk : public thunk<D,R> {
                         code_line(impl,'inp.open_field("'+fname+'")')
                         for v in vs:
                             card = sort_card(v.sort)
-                            code_line(impl,'inp.open_list('+str(card)+')')
+                            code_line(impl,'inp.open_list()')
                             open_loop(impl,[v])
                         code_line(impl,'__deser(inp,res.'+fname+''.join('[{}]'.format(varname(v)) for v in vs) + ')')
                         for v in vs:
@@ -2889,6 +2939,7 @@ class z3_thunk : public thunk<D,R> {
                         for v in vs:
                             close_loop(impl,[v])
                     close_scope(impl)
+            global_classname = None
 
 
             for sort_name in enum_sort_names:
@@ -2969,6 +3020,7 @@ class z3_thunk : public thunk<D,R> {
     int seed = 1;
     int sleep_ms = 10;
     int final_ms = 0; 
+    
     std::vector<char *> pargs; // positional args
     pargs.push_back(argv[0]);
     for (int i = 1; i < argc; i++) {
@@ -3067,6 +3119,7 @@ class z3_thunk : public thunk<D,R> {
                     impl.append('    initializing = true;\n')
                 impl.append('    {}_repl ivy{};\n'
                             .format(classname,cp))
+                impl.append('    for(unsigned i = 0; i < argc; i++) {ivy.__argv.push_back(argv[i]);}\n')
                 if target.get() == "test":
                     impl.append('    ivy._generating = false;\n')
                     emit_repl_boilerplate3test(header,impl,classname)
@@ -3215,8 +3268,8 @@ def emit_one_initial_state(header):
                 assign_symbol_from_model(header,sym,m)
             else:
                 mk_nondet_sym(header,sym,'init',0)
-    action = ia.Sequence(*[a for n,a in im.module.initializers])
-    action.emit(header)
+#    action = ia.Sequence(*[a for n,a in im.module.initializers])
+#    action.emit(header)
 
 def emit_parameter_assignments(impl):
     for sym in im.module.params:
@@ -4493,10 +4546,9 @@ def emit_repl_boilerplate3test(header,impl,classname):
 #endif
     for(int cycle = 0; cycle < test_iters; cycle++) {
 
-        int choices = num_gens + readers.size() + timers.size();
-        int rnd = choices ? (rand() % choices) : 0;
-        if (rnd < num_gens) {
-            double frnd = totalweight * (((double)rand())/(((double)RAND_MAX)+1.0));
+        double choices = totalweight + readers.size() + timers.size();
+        double frnd = choices * (((double)rand())/(((double)RAND_MAX)+1.0));
+        if (frnd < totalweight) {
             int idx = 0;
             double sum = 0.0;
             while (idx < num_gens-1) {
@@ -4624,6 +4676,15 @@ def emit_boilerplate1(header,impl,classname):
 
 using namespace hash_space;
 
+inline z3::expr forall(const std::vector<z3::expr> &exprs, z3::expr const & b) {
+    Z3_app *vars = new  Z3_app [exprs.size()];
+    std::copy(exprs.begin(),exprs.end(),vars);
+    Z3_ast r = Z3_mk_forall_const(b.ctx(), 0, exprs.size(), vars, 0, 0, b);
+    b.check_error();
+    delete vars;
+    return z3::expr(b.ctx(), r);
+}
+
 class gen : public ivy_gen {
 
 public:
@@ -4748,6 +4809,11 @@ public:
         return eval_apply(decl_name,3,args);
     }
 
+    int eval_apply(const char *decl_name, int arg0, int arg1, int arg2, int arg3) {
+        int args[4] = {arg0,arg1,arg2,arg3};
+        return eval_apply(decl_name,4,args);
+    }
+
     z3::expr apply(const char *decl_name, std::vector<z3::expr> &expr_args) {
         z3::func_decl decl = decls_by_name.find(decl_name)->second;
         unsigned arity = decl.arity();
@@ -4790,13 +4856,23 @@ public:
         return apply(decl_name,a);
     }
 
+    z3::expr apply(const char *decl_name, z3::expr arg0, z3::expr arg1, z3::expr arg2, z3::expr arg3, z3::expr arg4) {
+        std::vector<z3::expr> a;
+        a.push_back(arg0);
+        a.push_back(arg1);
+        a.push_back(arg2);
+        a.push_back(arg3);
+        a.push_back(arg4);
+        return apply(decl_name,a);
+    }
+
     z3::expr int_to_z3(const z3::sort &range, int64_t value) {
         if (range.is_bool())
             return ctx.bool_val((bool)value);
         if (range.is_bv())
-            return ctx.bv_val(value,range.bv_size());
+            return ctx.bv_val((int)value,range.bv_size());
         if (range.is_int())
-            return ctx.int_val(value);
+            return ctx.int_val((int)value);
         return enum_values.find(range)->second[(int)value]();
     }
 
@@ -4850,11 +4926,13 @@ public:
     }
 
     void add_alit(const z3::expr &pred){
-        // std::cout << "pred: " << pred << std::endl;
+        if (__ivy_modelfile.is_open()) 
+            __ivy_modelfile << "pred: " << pred << std::endl;
         std::ostringstream ss;
         ss << "alit:" << alits.size();
         z3::expr alit = ctx.bool_const(ss.str().c_str());
-        // std::cout << "alit: " << alit << std::endl;
+        if (__ivy_modelfile.is_open()) 
+            __ivy_modelfile << "alit: " << alit << std::endl;
         alits.push_back(alit);
         slvr.add(!alit || pred);
     }
@@ -4982,7 +5060,15 @@ public:
     bool solve() {
         // std::cout << alits.size();
         static bool show_model = true;
+        if (__ivy_modelfile.is_open()) 
+            __ivy_modelfile << "begin check:\\n" << slvr << "end check:\\n" << std::endl;
         while(true){
+            if (__ivy_modelfile.is_open()) {
+                __ivy_modelfile << "(check-sat"; 
+                for (unsigned i = 0; i < alits.size(); i++)
+                    __ivy_modelfile << " " << alits[i];
+                __ivy_modelfile << ")" << std::endl;
+            }
             z3::check_result res = slvr.check(alits.size(),&alits[0]);
             if (res != z3::unsat)
                 break;
@@ -4992,11 +5078,13 @@ public:
 //                    __ivy_modelfile << "begin unsat:\\n" << slvr << "end unsat:\\n" << std::endl;
                 return false;
             }
-            //for (unsigned i = 0; i < core.size(); i++)
-            //    std::cout << "core: " << core[i] << std::endl;
+            if (__ivy_modelfile.is_open()) 
+                for (unsigned i = 0; i < core.size(); i++)
+                    __ivy_modelfile << "core: " << core[i] << std::endl;
             unsigned idx = rand() % core.size();
             z3::expr to_delete = core[idx];
-            // std::cout << "to delete: " << to_delete << std::endl;
+            if (__ivy_modelfile.is_open()) 
+                __ivy_modelfile << "to delete: " << to_delete << std::endl;
             for (unsigned i = 0; i < alits.size(); i++)
                 if (z3::eq(alits[i],to_delete)) {
                     alits[i] = alits.back();
@@ -5069,6 +5157,17 @@ def main_int(is_ivyc):
         global emit_main
         emit_main = False
         
+    with iu.ErrorPrinter():
+        if len(sys.argv) == 2 and ic.get_file_version(sys.argv[1]) >= [2]:
+            if not target.get() == 'repl' and emit_main:
+                raise iu.IvyError(None,'Version 2 compiler supports only target=repl')
+            cdir = os.path.join(os.path.dirname(__file__), 'ivy2/s3')
+            cmd = 'IVY_INCLUDE_PATH={} {} {}'.format(os.path.join(cdir,'include'),os.path.join(cdir,'ivyc_s3'),sys.argv[1])
+            print cmd
+            sys.stdout.flush()
+            status = os.system(cmd)
+            exit(status)
+
 
     with im.Module():
         if target.get() == 'test':
@@ -5084,16 +5183,18 @@ def main_int(is_ivyc):
             if isolate != None:
                 isolates = [isolate]
             else:
-                extracts = list((x,y) for x,y in im.module.isolates.iteritems()
-                                if isinstance(y,ivy_ast.ExtractDef))
-                if len(extracts) == 0:
-                    isol = ivy_ast.ExtractDef(ivy_ast.Atom('extract'),ivy_ast.Atom('this'))
-                    isol.with_args = 1
-                    im.module.isolates['extract'] = isol
-                    isolates = ['extract']
-                elif len(extracts) == 1:
-                    isolates = [extracts[0][0]]
-
+                if target.get() == 'test':
+                    isolates = ['this']
+                else:
+                    extracts = list((x,y) for x,y in im.module.isolates.iteritems()
+                                    if isinstance(y,ivy_ast.ExtractDef))
+                    if len(extracts) == 0:
+                        isol = ivy_ast.ExtractDef(ivy_ast.Atom('extract'),ivy_ast.Atom('this'))
+                        isol.with_args = 1
+                        im.module.isolates['extract'] = isol
+                        isolates = ['extract']
+                    elif len(extracts) == 1:
+                        isolates = [extracts[0][0]]
         else:
             if isolate != None:
                 isolates = [isolate]
@@ -5112,13 +5213,18 @@ def main_int(is_ivyc):
                 if isolates == [None] and not iu.version_le(iu.get_string_version(),"1.6"):
                     isolates = ['this']
 
-        import sys
         import json
         for isolate in isolates:
             with im.module.copy():
                 with iu.ErrorPrinter():
 
-                    import os
+
+                    def do_cmd(cmd):
+                        print cmd
+                        status = os.system(cmd)
+                        if status:
+                            exit(1)
+    
                     if isolate:
                         if len(isolates) > 1:
                             print "Compiling isolate {}...".format(isolate)
@@ -5183,14 +5289,21 @@ def main_int(is_ivyc):
                             else:
                                 libspec += ''.join(' -l' + ll for ll in y.rep.strip('"').split(',') if not ll.endswith('.lib'))
                     if platform.system() == 'Windows':
-                        if 'Z3DIR' in os.environ:
-                            incspec = '/I %Z3DIR%\\include'
-                            libpspec = '/LIBPATH:%Z3DIR%\\lib /LIBPATH:%Z3DIR%\\bin'
-                        else:
-                            import z3
-                            z3path = os.path.dirname(os.path.abspath(z3.__file__))
-                            incspec = '/I {}'.format(z3path)
-                            libpspec = '/LIBPATH:{}'.format(z3path)
+                        # if 'Z3DIR' in os.environ:
+                        #     incspec = '/I %Z3DIR%\\include'
+                        #     libpspec = '/LIBPATH:%Z3DIR%\\lib /LIBPATH:%Z3DIR%\\bin'
+                        # else:
+                        #     import z3
+                        #     z3path = os.path.dirname(os.path.abspath(z3.__file__))
+                        #     incspec = '/I {}'.format(z3path)
+                        #     libpspec = '/LIBPATH:{}'.format(z3path)
+                        _dir = os.path.dirname(os.path.abspath(__file__))
+                        incspec = '/I {}'.format(os.path.join(_dir,'include'))
+                        libpspec = '/LIBPATH:{}'.format(os.path.join(_dir,'lib'))
+                        if not os.path.exists('libz3.dll'):
+                            print 'Copying libz3.dll to current directory.'
+                            print 'If the binary {}.exe is moved to another directory, this file must also be moved.'.format(basename)
+                            do_cmd('copy {} libz3.dll'.format(os.path.join(_dir,'lib','libz3.dll')))
                         for lib in libs:
                             _incdir = lib[1] if len(lib) >= 2 else []
                             _libdir = lib[2] if len(lib) >= 3 else []
@@ -5242,7 +5355,6 @@ def outfile(name):
     return (opt_outdir.get() + '/' + name) if opt_outdir.get() else name
         
 def find_vs():
-    import os
     try:
         windir = os.getenv('WINDIR')
         drive = windir[0]
@@ -5256,7 +5368,7 @@ def find_vs():
     raise iu.IvyError(None,'Cannot find a suitable version of Visual Studio (require 10.0-15.0)')
 
 if __name__ == "__main__":
-    main()
+    main_int(True)
         
 hash_h = """
 /*++

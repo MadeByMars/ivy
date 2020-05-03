@@ -251,7 +251,7 @@ class DefinitionSchema(Definition):
     pass
 
 
-lg_ops = [lg.Eq, lg.Not, lg.Globally, lg.Eventually, lg.And, lg.Or, lg.Implies, lg.Iff, lg.Ite, lg.ForAll, lg.Exists, lg.Lambda, lg.NamedBinder]
+lg_ops = [lg.Eq, lg.Not, lg.And, lg.Or, lg.Implies, lg.Iff, lg.Ite, lg.ForAll, lg.Exists, lg.Lambda, lg.NamedBinder]
 
 for cls in lg_ops:
     cls.args = property(lambda self: [ a for a in self])
@@ -260,7 +260,11 @@ for cls in lg_ops:
 for cls in [lg.ForAll, lg.Exists, lg.Lambda]:
     cls.clone = lambda self,args: type(self)(self.variables,*args)
 
-lg.NamedBinder.clone = lambda self,args: lg.NamedBinder(self.name, self.variables, *args)
+for cls in [lg.Globally, lg.Eventually]:
+    cls.args = property(lambda self: [ a for a in self])
+    cls.clone = lambda self,args: type(self)(self.environ,*args)
+
+lg.NamedBinder.clone = lambda self,args: lg.NamedBinder(self.name, self.variables, self.environ, *args)
 lg.NamedBinder.rep = property(lambda self: self)
 
 lg.Apply.clone = lambda self,args: type(self)(self.func, *args)
@@ -598,7 +602,7 @@ def is_binder(term):
 for b in [lg.ForAll,lg.Exists,lg.Lambda]:
     b.clone_binder = lambda self, variables, body, b = b: b(variables,body)
 
-lg.NamedBinder.clone_binder = lambda self, variables, body: lg.NamedBinder(self.name,variables,body)
+lg.NamedBinder.clone_binder = lambda self, variables, body: lg.NamedBinder(self.name,variables,self.enrivon,body)
 
 def is_named_binder(term):
     return isinstance(term, lg.NamedBinder)
@@ -606,6 +610,14 @@ def is_named_binder(term):
 def is_temporal(term):
     return isinstance(term, (lg.Globally, lg.Eventually))
 
+def has_temporal(fmla):
+    return is_temporal(fmla) or any(has_temporal(x) for x in fmla.args)
+
+# A formula is a Gprop if it is of the form Globally(phi) where phi does not have temporal
+# operators.
+def is_gprop(fmla):
+    return isinstance(fmla,lg.Globally) and not has_temporal(fmla.args[0])
+    
 def quantifier_vars(term):
     return term.variables
 
@@ -1190,6 +1202,9 @@ sig = Sig()
 
 infix_symbols = set(['<','<=','>','>=','+','-','*','/'])
 
+prec_symbols = {'<':7,'<=':7,'>':7,'>=':7,'+':12,'-':13,'*':14,'/':15}
+
+
 show_variable_sorts = True
 show_numeral_sorts = True
 
@@ -1206,54 +1221,75 @@ def fmla_to_str_ambiguous(term):
     global show_numeral_sorts
     show_variable_sorts = False
     show_numeral_sorts = False
-    res = term.ugly()
+    res = term.ugly(0)
     show_variable_sorts = True
     show_numeral_sorts = True
     return res
 
-def app_ugly(self):
+def app_ugly(self,prec):
     if type(self.func) is lg.NamedBinder:
         name = str(self.func)
     else:
         name = self.func.name
-    args = [a.ugly() for a in self.args]
-    if name in infix_symbols:
-        return (' ' + name + ' ').join(args)
+    myprec = prec_symbols.get(name,1)
+    infix = name in infix_symbols
+    if infix and len(self.args) == 2:
+        args = [self.args[0].ugly(myprec-1), self.args[1].ugly(myprec)]
+    else:
+        args = [a.ugly(myprec) for a in self.args]
+    if infix:
+        if len(args) == 1 and name == '-':
+            res = name + args[0]
+        else:
+            res = (' ' + name + ' ').join(args)
+        if myprec <= prec:
+            res = '(' + res + ')'
+        return res
     if len(args) == 0:  # shouldn't happen
         return name
     return name + '(' + ','.join(args) + ')'
 
-def nary_ugly(op,args,parens = True):
-    res = (' ' + op + ' ').join([a.ugly() for a in args])
-    return ('(' + res + ')') if len(args) > 1 and parens else res
+def nary_ugly(op,args,myprec,prec):
+    if len(args) == 2:
+        uargs = [args[0].ugly(myprec-1), args[1].ugly(myprec)]
+    else:
+        uargs = [a.ugly(myprec) for a in args]
+    res = (' ' + op + ' ').join(uargs)
+    return ('(' + res + ')') if len(args) > 1 and myprec <= prec else res
 
-lg.Var.ugly = (lambda self: (self.name+':'+self.sort.name)
+lg.Var.ugly = (lambda self,prec: (self.name+':'+self.sort.name)
                   if show_variable_sorts and not isinstance(self.sort,lg.TopSort) else self.name)
-lg.Const.ugly = (lambda self: (self.name+':'+self.sort.name)
+lg.Const.ugly = (lambda self,prec: (self.name+':'+self.sort.name)
                     if show_numeral_sorts and self.is_numeral() and not isinstance(self.sort,lg.TopSort)
                  else self.name)
-lg.Eq.ugly = lambda self: nary_ugly('=',self.args,parens=False)
-lg.And.ugly = lambda self: nary_ugly('&',self.args) if self.args else 'true'
-lg.Or.ugly = lambda self: nary_ugly('|',self.args) if self.args else 'false'
-lg.Not.ugly = lambda self: (nary_ugly('~=',self.body.args,parens=False)
+lg.Eq.ugly = lambda self,prec: nary_ugly('=',self.args,7,prec)
+lg.And.ugly = lambda self,prec: nary_ugly('&',self.args,5,prec) if self.args else 'true'
+lg.Or.ugly = lambda self,prec: nary_ugly('|',self.args,4,prec) if self.args else 'false'
+lg.Not.ugly = lambda self,prec: (nary_ugly('~=',self.body.args,8,prec)
                                if type(self.body) is lg.Eq
-                               else '~{}'.format(self.body.ugly()))
-lg.Globally.ugly = lambda self: ('globally {}'.format(self.body.ugly()))
-lg.Eventually.ugly = lambda self: ('eventually {}'.format(self.body.ugly()))
-lg.Implies.ugly = lambda self: nary_ugly('->',self.args,parens=False)
-lg.Iff.ugly = lambda self: nary_ugly('<->',self.args,parens=False)
-lg.Ite.ugly = lambda self:  '({} if {} else {})'.format(*[self.args[idx].ugly() for idx in (1,0,2)])
-Definition.ugly = lambda self: nary_ugly('=',self.args,parens=False)
+                               else '~{}'.format(self.body.ugly(6)))
+lg.Globally.ugly = lambda self,prec: ('globally{} {}'.format(ugly_environ(self),self.body.ugly(2)))
+lg.Eventually.ugly = lambda self,prec: ('eventually{} {}'.format(ugly_environ(self),self.body.ugly(2)))
+lg.Implies.ugly = lambda self,prec: nary_ugly('->',self.args,3,prec)
+lg.Iff.ugly = lambda self,prec: nary_ugly('<->',self.args,3,prec)
+lg.Ite.ugly = lambda self,prec:  '({} if {} else {})'.format(*[self.args[idx].ugly(9) for idx in (1,0,2)])
+Definition.ugly = lambda self,prec: nary_ugly('=',self.args,7,prec)
+
+def ugly_environ(self):
+    environ = self.environ
+    return '' if environ is None else '['+str(environ)+']'
 
 lg.Apply.ugly = app_ugly
 
-def quant_ugly(self):
+def quant_ugly(self,prec):
     res = ('forall ' if isinstance(self,lg.ForAll) else
            'exists ' if isinstance(self,lg.Exists) else
            'lambda ' if isinstance(self,lg.Lambda) else
            '$' + self.name + ' ')
-    res += ','.join(v.ugly() for v in self.variables)
-    res += '. ' + self.body.ugly()
+    res += ','.join(v.ugly(1) for v in self.variables)
+    res += '. ' + self.body.ugly(1)
+    if prec >= 1:
+        res = '(' + res + ')'
     return res
 
 for cls in [lg.ForAll,lg.Exists, lg.Lambda, lg.NamedBinder]:
@@ -1324,6 +1360,7 @@ for cls in [lg.ForAll, lg.Exists, lg.Lambda]:
 lg.NamedBinder.drop_annotations = lambda self,inferred_sort,annotated_vars: lg.NamedBinder(
     self.name,
     [v.drop_annotations(False,annotated_vars) for v in self.variables],
+    self.environ,
     self.body.drop_annotations(True,annotated_vars)
 )
 
@@ -1333,9 +1370,10 @@ def default_drop_annotations(self,inferred_sort,annotated_vars):
 for cls in [lg.Not, lg.Globally, lg.Eventually, lg.And, lg.Or, lg.Implies, lg.Iff, Definition]: # should binder be here?
     cls.drop_annotations = default_drop_annotations
 
+
 def pretty_fmla(self):
     d = self.drop_annotations(False,set())
-    return d.ugly()
+    return d.ugly(0)
 
 # for cls in [lg.Eq, lg.Not, lg.And, lg.Or, lg.Implies, lg.Iff, lg.Ite, lg.ForAll, lg.Exists,
 #             lg.Apply, lg.Var, lg.Const, lg.Lambda, lg.NamedBinder]:
@@ -1399,7 +1437,9 @@ def is_numeral(term):
     return isinstance(term,Symbol) and term.is_numeral()
 
 def is_interpreted_symbol(s):
-    return is_numeral(s) and is_interpreted_sort(s.sort) or symbol_is_polymorphic(s) and is_interpreted_sort(s.sort.dom[0])
+#    if symbol_is_polymorphic(s) and len(s.sort.dom) == 0:
+#        print s
+    return is_numeral(s) and is_interpreted_sort(s.sort) or symbol_is_polymorphic(s) and len(s.sort.dom) > 0 and is_interpreted_sort(s.sort.dom[0])
 
 def is_deterministic_fmla(f):
     if isinstance(f,Some) and len(f.args) < 4:
@@ -1416,6 +1456,9 @@ def sym_decl_to_str(sym):
     if not sort.is_relational():
         res += ' : {}'.format(sort.rng)
     return res
+
+def typed_sym_to_str(sym):
+    return str(sym.name) + ':' + str(sym.sort)
 
 def sig_to_str(self):
     res = ''
@@ -1642,5 +1685,15 @@ def polar(fmla,pos,pol):
         return None if pos == 0 else pol
     return None
 
+def label_temporal(fmla,label):
+    if is_temporal(fmla):
+        return type(fmla)(label,label_temporal(fmla.body,label))
+    elif is_named_binder(fmla):
+        return type(fmla)(fmla.name,fmla.variables,label,label_temporal(fmla.body,label))
+    args = [label_temporal(x,label) for x in fmla.args]
+    if type(fmla) == lg.Apply:
+        func = label_temporal(fmla.func, label)
+        return type(fmla)(func, *args)
+    return fmla.clone(args)
 
             
