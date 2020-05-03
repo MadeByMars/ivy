@@ -161,7 +161,6 @@ class print_module_vmt():
         fprint(self.get_vmt_string("$prop"))
         fprint("\n; Declare axioms")
         if len(self.mod.labeled_axioms) != 0:
-            fprint("")
             f, name, suffix, value = self.vmt["$axiom"]
             fprint('(define-fun my_axioms () Bool\n(and %s\n%s)\n)' % (f.instantiation(self.instance, {}), ' '.join(self.axioms)))
         else:
@@ -352,7 +351,6 @@ class print_module_vmt():
                 if var not in update[0]:
                     copies += self.copy_constant(var)
             self.add_new_constants(sf)
-            name = name.replace(":", "_")
             
             actname = ("action_" + name).replace(":", "_")
             self.actions.add(actname)
