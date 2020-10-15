@@ -84,7 +84,7 @@ class print_module_vmt():
             print("native_definitions: %s" % str(self.mod.native_definitions))
             assert(0)
         if len(self.mod.sig.interp) != 0:
-            print("sig.interp: %s" % str(self.mod.sig.interp))
+            print >> sys.stderr, "sig.interp: %s" % str(self.mod.sig.interp)
 #            assert(0)
 
         if len(self.mod.definitions) != 0:
@@ -223,7 +223,8 @@ class print_module_vmt():
                 self.instance[name] = n
                 for i in range(n):
                     for j in range(i):
-                        self.axioms.append('(not (= %s_%s %s_%s))'% (sort.name, sort.extension[i], sort.name, sort.extension[j]))
+                        if sort.extension[i] in ivy_logic.sig.symbols and sort.extension[j] in ivy_logic.sig.symbols:
+                            self.axioms.append('(not (= %s_%s %s_%s))'% (sort.name, sort.extension[i], sort.name, sort.extension[j]))
             elif not isinstance(sort,UninterpretedSort):
                 print >> sys.stderr, 'not uninterpreted sort', sort.get_vmt(), type(sort), isinstance(sort, lg.EnumeratedSort)
                 assert False, "todo"
@@ -235,27 +236,41 @@ class print_module_vmt():
 
 #        print >>sys.stderr, ivy_logic.sig.symbols
         for name,sym in ivy_logic.sig.symbols.iteritems():
+#            print name, sym.sort
             if isinstance(sym.sort,UnionSort):
-                assert len(sym.sort.sorts) <= 1, 'Unkonwn Union Sort: %s %s' % (name, sym.sort)
-                if len(sym.sort.sorts) == 0:
-                    continue
-                sym = lg.Const(sym.name, sym.sort.sorts[0])
-            psym = sym.prefix('__')
-            nsym = sym
-            self.pre.add(psym)
-            self.nex.add(nsym)
-            self.pre2nex[psym] = nsym
-            self.nex2pre[nsym] = psym
-            self.allvars.add(psym)
-            self.allvars.add(nsym)
+                print >> sys.stderr, "UnionSort", sym, sym.sort
+
+                for s in sym.sort.sorts:
+                    sym = lg.Const(sym.name, s)
+                    psym = sym.prefix('__')
+                    nsym = sym
+                    self.pre.add(psym)
+                    self.nex.add(nsym)
+                    self.pre2nex[psym] = nsym
+                    self.nex2pre[nsym] = psym
+                    self.allvars.add(psym)
+                    self.allvars.add(nsym)
             
-            self.add_constant(sym, True)
+                    self.add_constant(sym, True)
+            else:
+                psym = sym.prefix('__')
+                nsym = sym
+                self.pre.add(psym)
+                self.nex.add(nsym)
+                self.pre2nex[psym] = nsym
+                self.nex2pre[nsym] = psym
+                self.allvars.add(psym)
+                self.allvars.add(nsym)
+            
+                self.add_constant(sym, True)
     
     def process_defs(self):
         for lf in self.definitions:
-            assert False, "TODO"
             sym = lf.formula.defines()
             print >> sys.stderr, "def!", sym
+            print >> sys.stderr, lf
+            continue
+            assert False, "TODO"
             label = "def_" + str(sym)
             lhs = lf.formula.lhs()
             rhs = lf.formula.rhs()
@@ -263,15 +278,19 @@ class print_module_vmt():
 
             args = {}
             vargs = []
-            if isinstance(lhs, lg.Apply):
-                for arg in lhs.terms:
-                    name = "V" + str(len(vargs))
-                    varg = lg.Var(name, arg.sort)
-                    args[arg] = varg
-                    vargs.append(varg)
-                lhs = lgu.substitute(lhs, args)
-                rhs = lgu.substitute(rhs, args)
+            print lhs, rhs
+#            if isinstance(lhs, lg.Apply):
+#                for arg in lhs.terms:
+#                    name = "V" + str(len(vargs))
+#                    varg = lg.Var(name, arg.sort)
+#                    args[arg] = varg
+#                    vargs.append(varg)
+#                print args
+#                lhs = lgu.substitute(lhs, args)
+#                rhs = lgu.substitute(rhs, args)
             f = lg.Eq(lhs, rhs)
+            print f
+#            exit()
             if len(vargs) != 0:
                 f = lg.ForAll(vargs, f)
             res = (f, label, "definition", str(sym))
@@ -291,6 +310,7 @@ class print_module_vmt():
         f = self.get_formula(cl)
         pref = lgu.substitute(f, self.nex2pre)
         self.add_new_constants(pref, True)
+        pref = lgu.substitute(pref, self.nex2pre)
         res = (pref, "prop", "invar-property", "0")
         self.vmt["$prop"] = res
         
@@ -298,6 +318,7 @@ class print_module_vmt():
         fmlas = [lf.formula for lf in self.mod.labeled_axioms]
         cl = lut.Clauses(fmlas)
         f = self.get_formula(cl)
+        print >> sys.stderr, f
         self.add_new_constants(f, True)
         res = (f, "axiom", "axiom", "true")
         self.vmt["$axiom"] = res
@@ -314,48 +335,51 @@ class print_module_vmt():
             if init_cl[0] == init_cl[1]:
                 init_cl = init_cl[1:]
         clauses = lut.and_clauses(*init_cl)
+#        print >> sys.stderr, clauses
         f = self.get_formula(clauses)
         pref = lgu.substitute(f, self.nex2pre)
         self.add_new_constants(pref, True)
+        pref = lgu.substitute(f, self.nex2pre)
         res = (pref, "init", "init", "true")
         self.vmt["$init"] = res
         
     def process_actions(self):
 #        print self.mod.public_actions
-        st = [ivy_compiler.isolate.get(), 'timeout', 'handle']
+        st = ivy_compiler.isolate.get().split('.')[0]
+        st = [st, 'timeout', 'handle', 'recv']
         for name in self.mod.public_actions:
-          if ivy_compiler.isolate.get() == None or any(s in name for s in st):
-            action = ia.env_action(name)
+            print >>sys.stderr, name
+            if ivy_compiler.isolate.get() == None or any(s in name for s in st):
+                action = ia.env_action(name)
 #            print "action2: ", ia.action_def_to_str(name, action)
-            ag = ivy_art.AnalysisGraph()
-            pre = itp.State()
-            pre.clauses = lut.true_clauses()
-#            print pre.to_formula()
-            with itp.EvalContext(check=False):
-                post = ag.execute(action, pre)
-            history = ag.get_history(post)
-            clauses = lut.and_clauses(history.post)
-            f = self.get_formula(clauses)
-#            print >>sys.stderr, name, f
-            conjuncts = clauses.fmlas
-            defn = lut.close_epr(lg.And(*conjuncts))
+                ag = ivy_art.AnalysisGraph()
+                pre = itp.State()
+                pre.clauses = lut.true_clauses()
+                with itp.EvalContext(check=False):
+                    post = ag.execute(action, pre)
+                history = ag.get_history(post)
+                clauses = lut.and_clauses(history.post)
+                f = self.get_formula(clauses)
+#                print >>sys.stderr, name, f
+                conjuncts = clauses.fmlas
+                defn = lut.close_epr(lg.And(*conjuncts))
 #             print(defn)
 #             assert(0)
             
-            update = action.update(pre.domain,pre.in_scope)
-            sf = self.standardize_action(f, update[0], name)
+                update = action.update(pre.domain,pre.in_scope)
+                sf = self.standardize_action(f, update[0], name)
 #            print >> sys.stderr, sf
 
-            copies = []
-            for var in self.nex:
-                if var not in update[0]:
-                    copies += self.copy_constant(var)
-            self.add_new_constants(sf)
+                copies = []
+                for var in self.nex:
+                    if var not in update[0]:
+                        copies += self.copy_constant(var)
+                self.add_new_constants(sf)
             
-            actname = ("action_" + name).replace(":", "_")
-            self.actions.add(actname)
+                actname = ("action_" + name).replace(":", "_")
+                self.actions.add(actname)
 #            print 'result: ', res
-            self.vmt[actname] = ("(define-fun %s () Bool \n(and %s\n%s)\n)" % (actname, sf.instantiation(self.instance, {}), ' '.join(copies))).replace(":", "_")
+                self.vmt[actname] = ("(define-fun %s () Bool \n(and %s\n%s)\n)" % (actname, sf.instantiation(self.instance, {}), ' '.join(copies))).replace(":", "_")
 
     def process_guarantee(self):
         callgraph = defaultdict(list)
@@ -406,8 +430,8 @@ class print_module_vmt():
             if c not in self.allvars and c.name != '>' and c.name != '>=' and c.name != '<=':
                 print >> sys.stderr, "local variable %s" % (c.name)
                 if addPre:
-                    psym = c
-                    nsym = c.prefix("new_")
+                    psym = c.prefix("__")
+                    nsym = c
                     self.pre.add(psym)
                     self.nex.add(nsym)
                     self.pre2nex[psym] = nsym
@@ -433,9 +457,8 @@ class print_module_vmt():
             for s in sort.dom:
                 tmp = []
                 for i in range(self.instance[s.get_vmt()]):
-                    tmp += ['%s%d_%s'%(s, i, n) for n in names]
+                    tmp += ['%s%d_%s'%(s.get_vmt(), i, n) for n in names]
                 names = tmp
-
         st = '(declare-fun %s ()'
         if not sort.is_relational():
             st += ' {}_type)'.format(sort.rng.get_vmt())
@@ -455,7 +478,7 @@ class print_module_vmt():
                 for s in sort.dom:
                     tmp = []
                     for i in range(self.instance[s.get_vmt()]):
-                        tmp += ['%s%d_%s'%(s, i, n) for n in prenames]
+                        tmp += ['%s%d_%s'%(s.get_vmt(), i, n) for n in prenames]
                     prenames = tmp
             self.prestr[prename] = '\n'.join([st%(n) for n in prenames])
             
@@ -483,8 +506,8 @@ class print_module_vmt():
                 tmp    = []
                 pretmp = []
                 for i in range(self.instance[s.get_vmt()]):
-                    tmp    += ['%s%d_%s'%(s, i, n) for n in names]
-                    pretmp += ['%s%d_%s'%(s, i, n) for n in prenames]
+                    tmp    += ['%s%d_%s'%(s.get_vmt(), i, n) for n in names]
+                    pretmp += ['%s%d_%s'%(s.get_vmt(), i, n) for n in prenames]
                 names = tmp
                 prenames = pretmp
         return ["(= %s %s)" % (name, prename) for name, prename in zip(names, prenames)]

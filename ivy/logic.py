@@ -127,14 +127,9 @@ class Var(recstruct('Var', ['name', 'sort'], [])):
             assert False, "0 is not a var"
         if self.name in replace:
             return replace[self.name]
-        if not isinstance(self.sort, FunctionSort): 
-            return '%s_%s' % (self.sort.get_vmt(), self.name)
-        else:
-            return self.name
-        if isinstance(self.sort, BooleanSort):
-            return "(= %s bv_true)" % (self.name)
-        else:
-            return self.name
+        assert isinstance(self.sort, FunctionSort), "Function var?"
+        return '%s_%s' % (self.sort.get_vmt(), self.name)
+        return '%s_%s' % ('_'.join(str(s) for s in self.sort.domain), self.name)
 
 class Const(recstruct('Const', ['name', 'sort'], [])):
     __slots__ = ()
@@ -149,7 +144,7 @@ class Const(recstruct('Const', ['name', 'sort'], [])):
         if not isinstance(self.sort, FunctionSort): 
             return '%s_%s' % (self.sort.get_vmt(), self.name)
         else:
-            return self.name
+            return '%s_%s' % ('_'.join(s.get_vmt() for s in self.sort.domain), self.name)
     def __call__(self, *terms):
         return Apply(self, *terms) if len(terms) > 0 else self
     def instantiation(self, instances, replace):
@@ -217,18 +212,20 @@ class Apply(recstruct('Apply', [], ['func', '*terms'])):
                     self.func.get_vmt(),
                     ' '.join(t.get_vmt() for t in self.terms)
                         )
+
     def instantiation(self, instances, replace):
         name = self.func.name
         terms = self.terms
 
         if self.func.name == '>':
-            name = '<'
+            name = '__<'
             terms = (terms[1], terms[0])
         elif self.func.name == '>=':
-            name = '<'
+            name = '__<'
         elif self.func.name == '<=':
-            name = '<'
+            name = '__<'
             terms = (terms[1], terms[0])
+        name = '%s_%s' % ('_'.join(s.get_vmt() for s in self.func.sort.domain), name)
 
         args = [[]]
         for term in terms:
