@@ -238,7 +238,7 @@ class print_module_vmt():
         for name,sym in ivy_logic.sig.symbols.iteritems():
 #            print name, sym.sort
             if isinstance(sym.sort,UnionSort):
-                print >> sys.stderr, "UnionSort", sym, sym.sort
+                print >> sys.stderr, "UnionSort", sym, sym.sort.sorts
 
                 for s in sym.sort.sorts:
                     sym = lg.Const(sym.name, s)
