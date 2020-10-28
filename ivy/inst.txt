@@ -1,7 +1,0 @@
-2
-node=2
-epoch=5
-
-1
-zero=epoch0
-first=node0
