@@ -22,14 +22,11 @@ class UninterpretedSort(recstruct('UninterpretedSort', ['name'], [])):
     __slots__ = ()
     def __str__(self):
         return self.name
-    def get_vmt(self):
-        return self.name
+
 
 class BooleanSort(recstruct('BooleanSort', [], [])):
     __slots__ = ()
     def __str__(self):
-        return 'Boolean'
-    def get_vmt(self):
         return 'Boolean'
 
 Boolean = BooleanSort()
@@ -59,7 +56,7 @@ class EnumeratedSort(recstruct('EnumeratedSort', ['name','extension'], [])):
         return name,extension
     def __str__(self):
         return '{' + ','.join(self.extension) + '}'
-    def get_vmt(self):
+    def __vmt__(self):
         return self.name
     @property
     def constructors(self):
@@ -122,14 +119,7 @@ class Var(recstruct('Var', ['name', 'sort'], [])):
         return self.name
     def __call__(self, *terms):
         return Apply(self, *terms) if len(terms) > 0 else self
-    def instantiation(self, instances, replace):
-        if self.name == '0' or self.name == '__0':
-            assert False, "0 is not a var"
-        if self.name in replace:
-            return replace[self.name]
-        assert isinstance(self.sort, FunctionSort), "Function var?"
-        return '%s_%s' % (self.sort.get_vmt(), self.name)
-        return '%s_%s' % ('_'.join(str(s) for s in self.sort.domain), self.name)
+
 
 class Const(recstruct('Const', ['name', 'sort'], [])):
     __slots__ = ()
@@ -140,20 +130,15 @@ class Const(recstruct('Const', ['name', 'sort'], [])):
         return name, sort
     def __str__(self):
         return self.name
-    def get_vmt(self):
-        if not isinstance(self.sort, FunctionSort): 
-            return '%s_%s' % (self.sort.get_vmt(), self.name)
-        else:
-            return '%s_%s' % ('_'.join(s.get_vmt() for s in self.sort.domain), self.name)
     def __call__(self, *terms):
         return Apply(self, *terms) if len(terms) > 0 else self
-    def instantiation(self, instances, replace):
-        if self.name in replace:
-            assert False, "replace constant?"
-        if isinstance(self.sort, BooleanSort):
-            return "(= %s bv_true)" % (self.get_vmt())
+    def __vmt__(self):
+        if self.name in {'0', '__0'}:
+            return "{}_{}".format(self.sort, self.name)
+        if self.name in {'<', '__<', '-', '__-'}:
+            return "{}_{}".format(self.sort.domain[0], self.name)
         else:
-            return self.get_vmt()
+            return self.name
 
 
 def report_bad_sort(op,position,expected,got):
@@ -191,75 +176,23 @@ class Apply(recstruct('Apply', [], ['func', '*terms'])):
                 str(self.func),
                 ', '.join(str(t) for t in self.terms)
             )
-    def get_vmt(self):
+    def __vmt__(self):
         if len(self.terms) == 0:
-            return self.func.get_vmt()
+            return str(self.func)
         else:
-            if self.func.name == '>':
-                return '({} {} {})'.format(self.func.get_vmt().replace('>', '<', 1),
-                        self.terms[1], self.terms[0]
-                        )
-            elif self.func.name == '>=':
-                return '(not ({} {} {}))'.format(self.func.get_vmt().replace('>=', '<', 1),
-                        self.terms[0], self.terms[1]
-                        )
-            elif self.func.name == '<=':
-                return '(not ({} {} {}))'.format(self.func.get_vmt().replace('<=', '<', 1),
-                            self.terms[1], self.terms[0]
-                            )
-            else:
-                return '({} {})'.format(
-                    self.func.get_vmt(),
-                    ' '.join(t.get_vmt() for t in self.terms)
-                        )
-
-    def instantiation(self, instances, replace):
-        name = self.func.name
-        terms = self.terms
-
-        if self.func.name == '>':
-            name = '__<'
-            terms = (terms[1], terms[0])
-        elif self.func.name == '>=':
-            name = '__<'
-        elif self.func.name == '<=':
-            name = '__<'
-            terms = (terms[1], terms[0])
-        name = '%s_%s' % ('_'.join(s.get_vmt() for s in self.func.sort.domain), name)
-
-        args = [[]]
-        for term in terms:
-            if isinstance(term, Var) and term.name in replace:
-                args = map(lambda a: a + [(None, replace[term.name])], args)
-            else:
-                newargs = []
-                st = term.instantiation(instances, replace)
-                for j in range(instances[term.sort.name]):
-                    newargs += map(lambda x: x + [(st, "%s%d" % (term.sort.name, j))], args)
-                args = newargs
-        ret = ''
-        for arg in args:
-            st = name
-            cond = []
-            for i in range(len(arg)):
-                st = '%s_%s' % (arg[i][1], st)
-                if arg[i][0]:
-                    cond.append('(= %s %s)' % (arg[i][0], arg[i][1]))
-            if cond:
-                if arg != args[-1]:
-                    ret = '%s(ite (and %s) %s ' % (ret, ' '.join(cond), st)
-                else:
-                    ret = '%s%s' % (ret, st) + ')' * (len(args) - 1)
-            else:
-                ret = st
-        if isinstance(self.func.sort.range, BooleanSort):
-            ret = "(= %s bv_true)" % ret
-        else: 
-            ret = ret
-        if self.func.name == '>=' or self.func.name == '<=':
-            return '(not %s)' % ret
-        else:
-            return ret
+            name = str(self.func)
+            if name == '<':
+                return '({}_< {} {})'.format(self.func.sort.omain[0], self.terms[0], self.terms[1])
+            elif name == '>':
+                return '({}_< {} {})'.format(self.func.sort.domain[0], self.terms[1], self.terms[0])
+            elif name == '<=':
+                return '(not ({}_< {} {}))'.format(self.func.sort.domain[0], self.terms[1], self.terms[0])
+            elif name == '>=':
+                return '(not ({}_< {} {}))'.format(self.func.sort.domain[0], self.terms[0], self.terms[1])
+            return '({} {})'.format(
+                name,
+                ' '.join(str(t) for t in self.terms)
+            )
 
     sort = property(lambda self: TopS if self.func.sort == TopS else
                     self.func.sort.range)
@@ -279,10 +212,8 @@ class Eq(recstruct('Eq', [], ['t1', 't2'])):
         return t1, t2
     def __str__(self):
         return '({} == {})'.format(self.t1, self.t2)
-    def get_vmt(self):
-        return '(= {} {})'.format(self.t1.get_vmt(), self.t2.get_vmt())
-    def instantiation(self, instances, replace):
-        return "(= %s %s)" % (self.t1.instantiation(instances, replace), self.t2.instantiation(instances, replace))
+    def __vmt__(self):
+        return '(= {} {})'.format(self.t1, self.t2)
 
 
 # Ite expressions must be given a sort, as otherwise contructing trees of
@@ -307,10 +238,8 @@ class Ite(recstruct('Ite', ['sort'], ['cond', 't_then', 't_else'])):
         return sort, cond, t_then, t_else
     def __str__(self):
         return 'Ite({}, {}, {})'.format(self.cond, self.t_then, self.t_else)
-    def get_vmt(self):
-        return '(ite {} {} {})'.format(self.cond.get_vmt(), self.t_then.get_vmt(), self.t_else.get_vmt())
-    def instantiation(self, instances, replace):
-        return "(ite %s %s %s)" % (self.cond.instantiation(instances, replace), self.t_then.instantiation(instances, replace), self.t_else.instantiation(instances, replace))
+    def __vmt__(self):
+        return '(ite {} {} {})'.format(self.cond, self.t_then, self.t_else)
 
 
 class Not(recstruct('Not', [], ['body'])):
@@ -326,10 +255,8 @@ class Not(recstruct('Not', [], ['body'])):
             return '({} != {})'.format(self.body.t1, self.body.t2)
         else:
             return 'Not({})'.format(self.body)
-    def get_vmt(self):
-        return '(not {})'.format(self.body.get_vmt())
-    def instantiation(self, instances, replace):
-        return '(not %s)' % (self.body.instantiation(instances, replace))
+    def __vmt__(self):
+        return '(not {})'.format(self.body)
 
 
 class Globally(recstruct('Globally', ['environ'], ['body'])):
@@ -378,18 +305,13 @@ class And(recstruct('And', [], ['*terms'])):
         return 'And({})'.format(
             ', '.join(str(t) for t in self)
         )
-    def get_vmt(self):
+    def __vmt__(self):
         if len(self) == 1:
-            return '{}'.format(' '.join(t.get_vmt() for t in self))
+            return '{}'.format(' '.join(str(t) for t in self))
         elif len(self) == 0:
             return 'true'
         else:
-            return '(and {})'.format(' '.join(t.get_vmt() for t in self))
-    def instantiation(self, instances, replace):
-        if len(self) == 0:
-            return '(= bv_true bv_true)'
-        else:
-            return '(and %s)' % (' '.join([t.instantiation(instances, replace) for t in self]))
+            return '(and {})'.format(' '.join(str(t) for t in self))
 
 
 class Or(recstruct('Or', [], ['*terms'])):
@@ -410,18 +332,13 @@ class Or(recstruct('Or', [], ['*terms'])):
         return 'Or({})'.format(
             ', '.join(str(t) for t in self)
         )
-    def get_vmt(self):
+    def __vmt__(self):
         if len(self) == 1:
-            return '{}'.format(' '.join(t.get_vmt() for t in self))
+            return '{}'.format(' '.join(str(t) for t in self))
         elif len(self) == 0:
             return 'false'
         else:
-            return '(or {})'.format(' '.join(t.get_vmt() for t in self))
-    def instantiation(self, instances, replace):
-        if len(self) == 0:
-            return '(= bv_false bv_true)'
-        else:
-            return '(or %s)' % (' '.join([t.instantiation(instances, replace) for t in self]))
+            return '(or {})'.format(' '.join(str(t) for t in self))
 
 
 class Implies(recstruct('Implies', [], ['t1', 't2'])):
@@ -438,10 +355,8 @@ class Implies(recstruct('Implies', [], ['t1', 't2'])):
         return t1, t2
     def __str__(self):
         return 'Implies({}, {})'.format(self.t1, self.t2)
-    def get_vmt(self):
-        return '(=> {} {})'.format(self.t1.get_vmt(), self.t2.get_vmt())
-    def instantiation(self, instances, replace):
-        return "(=> %s %s)" % (self.t1.instantiation(instances, replace), self.t2.instantiation(instances, replace))
+    def __vmt__(self):
+        return '(=> {} {})'.format(self.t1, self.t2)
 
 
 class Iff(recstruct('Iff', [], ['t1', 't2'])):
@@ -458,15 +373,9 @@ class Iff(recstruct('Iff', [], ['t1', 't2'])):
         return t1, t2
     def __str__(self):
         return 'Iff({}, {})'.format(self.t1, self.t2)
-    def get_vmt(self):
-        return '(= {} {})'.format(self.t1.get_vmt(), self.t2.get_vmt())
-    def instantiation(self, instances, replace):
-        return "(= %s %s)" % (self.t1.instantiation(instances, replace), self.t2.instantiation(instances, replace))
+    def __vmt__(self):
+        return '(= {} {})'.format(self.t1, self.t2)
 
-def update_dict(dic, var, value):
-    tmp = dict(dic)
-    tmp[var.name] = "%s%d" % (var.sort.name, value)
-    return tmp
 
 class ForAll(recstruct('ForAll', ['variables'], ['body'])):
     __slots__ = ()
@@ -484,18 +393,11 @@ class ForAll(recstruct('ForAll', ['variables'], ['body'])):
         return '(ForAll {}. {})'.format(
             ', '.join('{}:{}'.format(v.name, v.sort) for v in sorted(self.variables)),
             self.body)
-    def get_vmt(self):
+    def __vmt__(self):
         return '(forall ({}) {})'.format(
-            ' '.join('({} {})'.format(v.get_vmt(), v.sort.get_vmt()) for v in sorted(self.variables)),
+            ' '.join('({} {})'.format(v.name, v.sort) for v in sorted(self.variables)),
             self.body)
-    def instantiation(self, instances, replace):
-        reps = [replace]
-        for v in self.variables:
-            newlist = []
-            for i in range(instances[v.sort.get_vmt()]):
-                newlist += [update_dict(dic, v, i) for dic in reps]
-            reps = newlist
-        return "(and %s)" % (' '.join([self.body.instantiation(instances, rep) for rep in reps]))
+
 
 class Exists(recstruct('Exists', ['variables'], ['body'])):
     __slots__ = ()
@@ -513,18 +415,10 @@ class Exists(recstruct('Exists', ['variables'], ['body'])):
         return '(Exists {}. {})'.format(
             ', '.join('{}:{}'.format(v.name, v.sort) for v in sorted(self.variables)),
             self.body)
-    def get_vmt(self):
+    def __vmt__(self):
         return '(exists ({}) {})'.format(
-            ' '.join('({} {})'.format(v.get_vmt(), v.sort.get_vmt()) for v in sorted(self.variables)),
+            ' '.join('({} {})'.format(v.name, v.sort) for v in sorted(self.variables)),
             self.body)
-    def instantiation(self, instances, replace):
-        reps = [replace]
-        for v in self.variables:
-            newlist = []
-            for i in range(instances[v.sort.get_vmt()]):
-                newlist += [update_dict(dic, v, i) for dic in reps]
-            reps = newlist
-        return "(or %s)" % (' '.join([self.body.instantiation(instances, rep) for rep in reps]))
 
 
 class Lambda(recstruct('Lambda', ['variables'], ['body'])):
