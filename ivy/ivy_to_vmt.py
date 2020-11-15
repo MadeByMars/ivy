@@ -26,7 +26,7 @@ def fprint(s):
 
 
 for cls in [lg.Eq, lg.Not, lg.And, lg.Or, lg.Implies, lg.Iff, lg.Ite, lg.ForAll, lg.Exists,
-            lg.Apply, lg.Var, lg.Const, lg.Lambda, lg.NamedBinder]:
+            lg.Apply, lg.Var, lg.Const, lg.Lambda, lg.NamedBinder, lg.EnumeratedSort]:
     if hasattr(cls,'__vmt__'):
         cls.__str__ = cls.__vmt__
 
@@ -46,6 +46,7 @@ class print_module_vmt():
         self.helpers = {}
         self.definitions = set()
         self.defn_labels = []
+        self.axioms = []
         self.defs = set()
         self.str = {}
         self.vmt = {}
@@ -64,7 +65,7 @@ class print_module_vmt():
             assert(0)
         if len(self.mod.sig.interp) != 0:
             print("sig.interp: %s" % str(self.mod.sig.interp))
-            assert(0)
+#            assert(0)
 
         if len(self.mod.definitions) != 0:
 #             print("definitions: %s" % str(self.mod.definitions))
@@ -145,14 +146,13 @@ class print_module_vmt():
             if name == 'bool':
                 continue
             if isinstance(sort, lg.EnumeratedSort):
-                print >> sys.stderr, 'enumerated sort', sort.get_vmt(), type(sort)
-                assert False
+                print >> sys.stderr, 'enumerated sort', sort, type(sort)
                 n = len(sort.extension)
 #                self.instance[name] = n
-#                for i in range(n):
-#                    for j in range(i):
-#                        if sort.extension[i] in ivy_logic.sig.symbols and sort.extension[j] in ivy_logic.sig.symbols:
-#                           self.axioms.append('(not (= %s_%s %s_%s))'% (sort.name, sort.extension[i], sort.name, sort.extension[j]))
+                for i in range(n):
+                    for j in range(i):
+                        if sort.extension[i] in ivy_logic.sig.symbols and sort.extension[j] in ivy_logic.sig.symbols:
+                           self.axioms.append(lg.Not(lg.Eq(ivy_logic.sig.symbols[sort.extension[i]], ivy_logic.sig.symbols[sort.extension[j]])))
             elif not isinstance(sort,UninterpretedSort):
                 assert False, "todo"
             res = ''
@@ -287,7 +287,8 @@ class print_module_vmt():
     def process_axiom(self):
         fmlas = [lf.formula for lf in self.mod.labeled_axioms]
         cl = lut.Clauses(fmlas)
-        f = self.get_formula(cl)
+        self.axioms.append(self.get_formula(cl))
+        f = lut.and_clauses(*self.axioms)
         self.add_new_constants(f, 'axiom')
         res = (f, "axiom", "axiom", "true")
         self.vmt["$axiom"] = res
@@ -300,6 +301,8 @@ class print_module_vmt():
             history = ag.get_history(ag.states[0])
             post = lut.and_clauses(history.post)
             init_cl.append(post)
+        while len(init_cl) > 1 and init_cl[-1] == init_cl[-2]:
+            init_cl.pop()
         clauses = lut.and_clauses(*init_cl)
         f = self.get_formula(clauses)
         pref = lgu.substitute(f, self.nex2pre)
