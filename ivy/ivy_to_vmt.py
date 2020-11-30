@@ -74,17 +74,17 @@ class print_module_vmt():
             self.mod.definitions = []
             
         with self.mod.theory_context():
-            print >>sys.stderr, 'sig'
+#            print >>sys.stderr, 'sig'
             self.process_sig()
-            print >>sys.stderr, 'defs'
+#            print >>sys.stderr, 'defs'
             self.process_defs()
-            print >>sys.stderr, 'conj'
+#            print >>sys.stderr, 'conj'
             self.process_conj()
-            print >>sys.stderr, 'axiom'
+#            print >>sys.stderr, 'axiom'
             self.process_axiom()
-            print >>sys.stderr, 'init'
+#            print >>sys.stderr, 'init'
             self.process_init()
-            print >>sys.stderr, 'actions'
+#            print >>sys.stderr, 'actions'
             self.process_actions()
             self.process_global()
     
@@ -129,7 +129,7 @@ class print_module_vmt():
             fprint("")
         fprint(self.get_vmt_string("$prop"))
         fprint("")
-        if len(self.mod.labeled_axioms) != 0:
+        if "$axiom" in self.vmt:
             fprint(self.get_vmt_string("$axiom"))
             fprint("")
         fprint(self.get_vmt_string("$init"))
@@ -146,7 +146,7 @@ class print_module_vmt():
             if name == 'bool':
                 continue
             if isinstance(sort, lg.EnumeratedSort):
-                print >> sys.stderr, 'enumerated sort', sort, type(sort)
+#                print >> sys.stderr, 'enumerated sort', sort, type(sort)
                 n = len(sort.extension)
 #                self.instance[name] = n
                 for i in range(n):
@@ -311,14 +311,13 @@ class print_module_vmt():
         self.vmt["$init"] = res
         
     def process_actions(self):
-        print >>sys.stderr, self.mod.public_actions
         if ivy_compiler.isolate.get():
             st = ivy_compiler.isolate.get().split('.')[0]
         else:
             st = ''
         st = [st, 'timeout', 'handle', 'recv']
         for name in self.mod.public_actions:
-            print >>sys.stderr, name
+            print >>sys.stderr, "action:\t", name
             if not (ivy_compiler.isolate.get() == None or any(s in name for s in st)):
                 continue
             action = ia.env_action(name)
@@ -358,7 +357,7 @@ class print_module_vmt():
                 self.defn_labels.remove(str(p))
             else:
                 self.pre.remove(p)
-            print p, type(p)
+#            print p, type(p)
             self.str.pop(str(p))
             self.set_global(n, str(p)+str(n))
 #             print("\treplacing %s -> %s globally" % (p, n))
@@ -403,7 +402,7 @@ class print_module_vmt():
         cons = lgu.used_constants(f)
         for c in cons:
             if c not in self.allvars and c.name not in {'<=', '>=', '>'}:
-                print >>sys.stderr, c, c.sort, origin
+#                print >>sys.stderr, c, c.sort, origin
                 if origin in {'prop', 'axiom'}:
                     sym = c
                     psym = sym.prefix('__')
